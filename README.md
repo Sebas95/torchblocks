@@ -1,2 +1,2 @@
 # torchblocks
-Minimal Lightning-style trainer in pure PyTorch
+Minimal trainer in pure PyTorch
