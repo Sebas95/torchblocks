@@ -120,6 +120,19 @@ def train_loop(model, criterion, num_epochs):
 
 
 def test_loop(model, criterion):
+	"""
+	Evaluates the model on the test dataset and computes the average loss and accuracy.
+	Args:
+		model (torch.nn.Module): The trained model to be evaluated.
+		criterion (torch.nn.Module): The loss function used to compute the loss.
+	Returns:
+		tuple: A tuple containing:
+			- avg_loss (float): The average loss over the test dataset.
+			- accuracy (float): The accuracy of the model on the test dataset (between 0 and 1).
+	Note:
+		- This function assumes that `test_loader` (DataLoader) and `device` (torch.device) are defined in the global scope.
+		- The function sets the model to evaluation mode and disables gradient computation for efficiency.
+	"""
 	
 	model.eval()  # Set model to evaluation mode
 	test_loss = 0.0
