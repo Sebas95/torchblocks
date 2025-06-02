@@ -16,7 +16,10 @@ from torchviz import make_dot
 # Local imports
 from conv_net import ConvNet
 
-default_model_path = './checkpoints/persistedmodel.pth'
+# Ensure the checkpoints directory exists and split the path
+default_model_dir = './checkpoints'
+default_model_filename = 'persistedmodel.pth'
+default_model_path = os.path.join(default_model_dir, default_model_filename)
 
 PLOTS_ROOT_DIR = './plots'
 
@@ -205,6 +208,8 @@ if __name__ == "__main__":
 		print(f"Loaded model: {args.model_path}...")
 	else:
 		print(f"Training model from scratch...")
+		if not os.path.isdir(default_model_dir):
+			os.makedirs(default_model_dir, exist_ok=True)
 		model = train_loop(model, criterion, args.epochs)
 		print(f"Saving model into {default_model_path}...")
 		torch.save(model.state_dict(), default_model_path)
