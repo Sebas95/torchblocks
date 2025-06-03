@@ -16,6 +16,8 @@ from torchviz import make_dot
 # Local imports
 from conv_net import ConvNet
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
+import random
+import numpy as np
 
 # Ensure the checkpoints directory exists and split the path
 default_model_dir = './checkpoints'
@@ -27,6 +29,17 @@ PLOTS_ROOT_DIR = './plots'
 # Map the code name to the class name
 VALID_MODELS = {ConvNet.__name__ : "EffConvNet"}
 
+# Set random seed for reproducibility
+def set_seed(seed):
+	torch.manual_seed(seed)
+	torch.cuda.manual_seed_all(seed)
+	os.environ['PYTHONHASHSEED'] = str(seed)
+	random.seed(seed)
+	np.random.seed(seed)
+
+# Set a fixed seed value
+SEED = 42
+set_seed(SEED)
 
 def build_plot_destination_path(model, file_name):
 
@@ -79,87 +92,29 @@ def plot_curves(func):
 		model, epoch_number, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls, \
 		val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls = func(*args, **kwargs)
 
+		# Refactored reusable method for plotting
+		def plot_metric_curve(metric_name, train_values, val_values=None, ylabel=None):
+			plt.figure(figsize=(10, 5))
+			plt.plot(epoch_number, train_values, label=f'Train {metric_name}', marker='o')
+			if val_values is not None:
+				plt.plot(epoch_number, val_values, label=f'Validation {metric_name}', marker='x')
+			plt.title(f"{metric_name} Curve")
+			plt.xlabel("Epoch")
+			plt.ylabel(ylabel or metric_name)
+			plt.legend()
+			plt.grid(True)
+			plt.tight_layout()
+			file_name = build_plot_destination_path(model, f'{metric_name.lower().replace(" ", "_")}_curve.png')
+			plt.savefig(file_name)
+			plt.close()
+
 		# Plot after training
-		plt.figure(figsize=(8, 5))
-		plt.plot(epoch_number, train_losses, label='Training Loss', marker='o')
-		plt.title("Learning Curve")
-		plt.xlabel("Epoch")
-		plt.ylabel("Loss")
-		plt.grid(True)
-		plt.legend()
-		plt.tight_layout()
-		file_name = build_plot_destination_path(model, 'learning_curve.png')
-		plt.savefig(file_name)
-		plt.close()
-
-		plt.figure(figsize=(10, 5))
-		plt.plot(epoch_number, train_losses, label='Train Loss', marker='o')
-		plt.plot(epoch_number, val_losses, label='Validation Loss', marker='x')
-		plt.title("Overfitting Plot")
-		plt.xlabel("Epoch")
-		plt.ylabel("Loss")
-		plt.legend()
-		plt.grid(True)
-		plt.tight_layout()
-		file_name = build_plot_destination_path(model, 'overfit_curve.png')
-		plt.savefig(file_name)
-		plt.close()
-
-		# Plot F1 scores
-		plt.figure(figsize=(10, 5))
-		plt.plot(epoch_number, train_f1_scores, label='Train F1 Score', marker='o')
-		plt.plot(epoch_number, val_f1_scores, label='Validation F1 Score', marker='x')
-		plt.title("F1 Score Curve")
-		plt.xlabel("Epoch")
-		plt.ylabel("F1 Score")
-		plt.legend()
-		plt.grid(True)
-		plt.tight_layout()
-		file_name = build_plot_destination_path(model, 'f1_score_curve.png')
-		plt.savefig(file_name)
-		plt.close()
-
-		# Plot accuracies
-		plt.figure(figsize=(10, 5))
-		plt.plot(epoch_number, train_accuracies, label='Train Accuracy', marker='o')
-		plt.plot(epoch_number, val_accuracies, label='Validation Accuracy', marker='x')
-		plt.title("Accuracy Curve")
-		plt.xlabel("Epoch")
-		plt.ylabel("Accuracy")
-		plt.legend()
-		plt.grid(True)
-		plt.tight_layout()
-		file_name = build_plot_destination_path(model, 'accuracy_curve.png')
-		plt.savefig(file_name)
-		plt.close()
-
-			# Plot precisions
-		plt.figure(figsize=(10, 5))
-		plt.plot(epoch_number, train_precisions, label='Train Precision', marker='o')
-		plt.plot(epoch_number, val_precisions, label='Validation Precision', marker='x')
-		plt.title("Precision Curve")
-		plt.xlabel("Epoch")
-		plt.ylabel("Precision")
-		plt.legend()
-		plt.grid(True)
-		plt.tight_layout()
-		file_name = build_plot_destination_path(model, 'precision_curve.png')
-		plt.savefig(file_name)
-		plt.close()
-
-		# Plot recalls
-		plt.figure(figsize=(10, 5))
-		plt.plot(epoch_number, train_recalls, label='Train Recall', marker='o')
-		plt.plot(epoch_number, val_recalls, label='Validation Recall', marker='x')
-		plt.title("Recall Curve")
-		plt.xlabel("Epoch")
-		plt.ylabel("Recall")
-		plt.legend()
-		plt.grid(True)
-		plt.tight_layout()
-		file_name = build_plot_destination_path(model, 'recall_curve.png')
-		plt.savefig(file_name)
-		plt.close()
+		plot_metric_curve("Learning", train_losses, ylabel="Loss")
+		plot_metric_curve("Overfitting", train_losses, val_losses, ylabel="Loss")
+		plot_metric_curve("F1 Score", train_f1_scores, val_f1_scores)
+		plot_metric_curve("Accuracy", train_accuracies, val_accuracies)
+		plot_metric_curve("Precision", train_precisions, val_precisions)
+		plot_metric_curve("Recall", train_recalls, val_recalls)
 
 		return model  # Return just the model, clean interface
 
