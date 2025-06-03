@@ -16,8 +16,6 @@ from torchviz import make_dot
 # Local imports
 from conv_net import ConvNet
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
-import random
-import numpy as np
 
 # Ensure the checkpoints directory exists and split the path
 default_model_dir = './checkpoints'
@@ -29,17 +27,6 @@ PLOTS_ROOT_DIR = './plots'
 # Map the code name to the class name
 VALID_MODELS = {ConvNet.__name__ : "EffConvNet"}
 
-# Set random seed for reproducibility
-def set_seed(seed):
-	torch.manual_seed(seed)
-	torch.cuda.manual_seed_all(seed)
-	os.environ['PYTHONHASHSEED'] = str(seed)
-	random.seed(seed)
-	np.random.seed(seed)
-
-# Set a fixed seed value
-SEED = 42
-set_seed(SEED)
 
 def build_plot_destination_path(model, file_name):
 
@@ -122,7 +109,33 @@ def plot_curves(func):
 
 
 @plot_curves
-def train_loop(model, criterion, num_epochs):
+def train_loop(model, criterion, num_epochs, train_loader, test_loader, device):
+	"""
+	Trains the model for a specified number of epochs and evaluates it on the test dataset.
+	Args:
+		model (torch.nn.Module): The model to be trained.
+		criterion (torch.nn.Module): The loss function used to compute the loss.
+		num_epochs (int): The number of epochs to train the model.
+		train_loader (torch.utils.data.DataLoader): DataLoader for the training dataset.
+		test_loader (torch.utils.data.DataLoader): DataLoader for the test dataset.
+		device (torch.device): The device to run the training on (e.g., 'cuda' or 'cpu').
+	Returns:
+		tuple: A tuple containing:
+			- model (torch.nn.Module): The trained model.
+			- epoch_number (list): List of epoch numbers.
+			- train_losses (list): List of training losses for each epoch.
+			- train_f1_scores (list): List of training F1 scores for each epoch.
+			- train_accuracies (list): List of training accuracies for each epoch.
+			- train_precisions (list): List of training precisions for each epoch.
+			- train_recalls (list): List of training recalls for each epoch.
+			- val_losses (list): List of validation losses for each epoch.
+			- val_f1_scores (list): List of validation F1 scores for each epoch.
+			- val_accuracies (list): List of validation accuracies for each epoch.
+			- val_precisions (list): List of validation precisions for each epoch.
+			- val_recalls (list): List of validation recalls for each epoch.
+	"""
+
+	# Define the optimizer
 	optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.7)
 
 	epoch_number = []
@@ -134,6 +147,10 @@ def train_loop(model, criterion, num_epochs):
 	val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls = ([] for _ in range(5))
 	
 	for epoch in range(num_epochs):
+
+		# Set the model to training mode
+		model.train()
+
 		epoch_losses = []
 		true_labels = []
 		predicted_labels = []
@@ -190,7 +207,7 @@ def train_loop(model, criterion, num_epochs):
 		train_recalls.append(train_recall)
 		
 		# Get the validation loss
-		val_loss, val_accuracy, val_f1, val_precision, val_recall = test_loop(model, criterion)
+		val_loss, val_accuracy, val_f1, val_precision, val_recall = test_loop(model, criterion, test_loader, device)
 		
 		# Append validation metrics to their respective lists
 		val_losses.append(val_loss)
@@ -203,19 +220,23 @@ def train_loop(model, criterion, num_epochs):
 		val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls
 
 
-def test_loop(model, criterion):
+def test_loop(model, criterion, test_loader, device):
 	"""
 	Evaluates the model on the test dataset and computes the average loss and accuracy.
 	Args:
 		model (torch.nn.Module): The trained model to be evaluated.
 		criterion (torch.nn.Module): The loss function used to compute the loss.
+		test_loader (torch.utils.data.DataLoader): DataLoader for the test dataset.
+		device (torch.device): The device to run the evaluation on (e.g., 'cuda' or 'cpu').
 	Returns:
 		tuple: A tuple containing:
 			- avg_loss (float): The average loss over the test dataset.
 			- accuracy (float): The accuracy of the model on the test dataset (between 0 and 1).
+			- f1 (float): The F1 score of the model on the test dataset.
+			- precision (float): The precision of the model on the test dataset.
+			- recall (float): The recall of the model on the test dataset.
 	Note:
-		- This function assumes that `test_loader` (DataLoader) and `device` (torch.device) are defined in the global scope.
-		- The function sets the model to evaluation mode and disables gradient computation for efficiency.
+		- This function sets the model to evaluation mode and disables gradient computation for efficiency.
 	"""
 	
 	model.eval()  # Set model to evaluation mode
@@ -304,12 +325,12 @@ if __name__ == "__main__":
 		print(f"Training model from scratch...")
 		if not os.path.isdir(default_model_dir):
 			os.makedirs(default_model_dir, exist_ok=True)
-		model = train_loop(model, criterion, args.epochs)
+		model = train_loop(model, criterion, args.epochs, train_loader, test_loader, device)
 		print(f"Saving model into {default_model_path}...")
 		torch.save(model.state_dict(), default_model_path)
 
 	# Test loop
-	test_loop(model, criterion)
+	test_loop(model, criterion, test_loader, device)
 
 	# Print summary
 	input_size = (64, 3, 32, 32)
