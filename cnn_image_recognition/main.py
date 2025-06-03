@@ -16,6 +16,7 @@ from torchviz import make_dot
 # Local imports
 from conv_net import ConvNet
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
+from tqdm import tqdm
 
 # Ensure the checkpoints directory exists and split the path
 default_model_dir = './checkpoints'
@@ -27,6 +28,20 @@ PLOTS_ROOT_DIR = './plots'
 # Map the code name to the class name
 VALID_MODELS = {ConvNet.__name__ : "EffConvNet"}
 
+class TrainingMetrics:
+	def __init__(self, epoch_number, train_losses, train_f1_scores, train_accuracies, train_precisions, 
+				 train_recalls, val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls):
+		self.epoch_number = epoch_number
+		self.train_losses = train_losses 
+		self.train_f1_scores = train_f1_scores
+		self.train_accuracies = train_accuracies
+		self.train_precisions = train_precisions
+		self.train_recalls = train_recalls
+		self.val_losses = val_losses
+		self.val_f1_scores = val_f1_scores 
+		self.val_accuracies = val_accuracies
+		self.val_precisions = val_precisions
+		self.val_recalls = val_recalls
 
 def build_plot_destination_path(model, file_name):
 
@@ -76,8 +91,19 @@ def plot_curves(func):
 	"""
 	@wraps(func)
 	def wrapper(*args, **kwargs):
-		model, epoch_number, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls, \
-		val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls = func(*args, **kwargs)
+		model, metrics = func(*args, **kwargs)
+		
+		epoch_number = metrics.epoch_number
+		train_losses = metrics.train_losses
+		train_f1_scores = metrics.train_f1_scores
+		train_accuracies = metrics.train_accuracies
+		train_precisions = metrics.train_precisions
+		train_recalls = metrics.train_recalls
+		val_losses = metrics.val_losses
+		val_f1_scores = metrics.val_f1_scores
+		val_accuracies = metrics.val_accuracies 
+		val_precisions = metrics.val_precisions
+		val_recalls = metrics.val_recalls
 
 		# Refactored reusable method for plotting
 		def plot_metric_curve(metric_name, train_values, val_values=None, ylabel=None):
@@ -110,31 +136,32 @@ def plot_curves(func):
 
 @plot_curves
 def train_loop(model, criterion, num_epochs, train_loader, test_loader, device):
-	"""
-	Trains the model for a specified number of epochs and evaluates it on the test dataset.
+	"""Train a PyTorch model using the provided data loaders.
+	This function handles the training loop for a neural network model, computing various
+	metrics for both training and validation sets during training.
 	Args:
-		model (torch.nn.Module): The model to be trained.
-		criterion (torch.nn.Module): The loss function used to compute the loss.
-		num_epochs (int): The number of epochs to train the model.
-		train_loader (torch.utils.data.DataLoader): DataLoader for the training dataset.
-		test_loader (torch.utils.data.DataLoader): DataLoader for the test dataset.
-		device (torch.device): The device to run the training on (e.g., 'cuda' or 'cpu').
+		model: PyTorch model to be trained
+		criterion: Loss function to be used for training
+		num_epochs (int): Number of training epochs
+		train_loader (DataLoader): DataLoader for training data
+		test_loader (DataLoader): DataLoader for validation/test data
+		device (torch.device): Device to run the training on (CPU or GPU)
 	Returns:
-		tuple: A tuple containing:
-			- model (torch.nn.Module): The trained model.
-			- epoch_number (list): List of epoch numbers.
-			- train_losses (list): List of training losses for each epoch.
-			- train_f1_scores (list): List of training F1 scores for each epoch.
-			- train_accuracies (list): List of training accuracies for each epoch.
-			- train_precisions (list): List of training precisions for each epoch.
-			- train_recalls (list): List of training recalls for each epoch.
-			- val_losses (list): List of validation losses for each epoch.
-			- val_f1_scores (list): List of validation F1 scores for each epoch.
-			- val_accuracies (list): List of validation accuracies for each epoch.
-			- val_precisions (list): List of validation precisions for each epoch.
-			- val_recalls (list): List of validation recalls for each epoch.
+		tuple: Contains:
+			- model: Trained PyTorch model
+			- TrainingMetrics: Object containing lists of training and validation metrics:
+				- epoch_number: List of epoch numbers
+				- train_losses: List of training losses per epoch
+				- train_f1_scores: List of training F1 scores per epoch
+				- train_accuracies: List of training accuracies per epoch
+				- train_precisions: List of training precision scores per epoch
+				- train_recalls: List of training recall scores per epoch
+				- val_losses: List of validation losses per epoch
+				- val_f1_scores: List of validation F1 scores per epoch
+				- val_accuracies: List of validation accuracies per epoch
+				- val_precisions: List of validation precision scores per epoch
+				- val_recalls: List of validation recall scores per epoch
 	"""
-
 	# Define the optimizer
 	optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.7)
 
@@ -215,9 +242,10 @@ def train_loop(model, criterion, num_epochs, train_loader, test_loader, device):
 		val_accuracies.append(val_accuracy)
 		val_precisions.append(val_precision)
 		val_recalls.append(val_recall)
-    
-	return model, epoch_number, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls, \
-		val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls
+
+
+	return model, TrainingMetrics(epoch_number, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls,
+					val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls)
 
 
 def test_loop(model, criterion, test_loader, device):
@@ -281,72 +309,123 @@ if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description="Train and test CNN")
 	
 	# Required parameters first
-	parser.add_argument("--epochs", type=int, help="Numer of epochs", required=True)
+	parser.add_argument("--epochs", type=int, help="Number of epochs", required=True)
 	parser.add_argument("--model", type=str, help=f"Available model to use: {', '.join(VALID_MODELS.values())}", required=True)
-	
-	# Optional parameters
 	parser.add_argument("--model-path", type=str, help="Path to .pth file with model state_dict")
 	args = parser.parse_args()
-	
-	# Validate the model name
-	if args.model not in VALID_MODELS.values():
-		raise ValueError(f"❌ Invalid model: '{args.model}'. Valid options are: {', '.join(VALID_MODELS.values())}")
 
-	# Retrieve the data set 
-	tensor_transform = transforms.ToTensor()
-	normalization_transform = transforms.Normalize((0.5,), (0.5,))
-	transform = transforms.Compose([tensor_transform, normalization_transform])
+	def load_data():
+		"""Data loading phase"""
+		tensor_transform = transforms.ToTensor()
+		normalization_transform = transforms.Normalize((0.5,), (0.5,))
+		transform = transforms.Compose([tensor_transform, normalization_transform])
 
-	train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-	test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+		train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+		test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+		return train_dataset, test_dataset
 
-	train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-	test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+	def setup_training_environment(train_dataset, test_dataset):
+		"""Data provisioning phase"""
+		# Validate model name
+		if args.model not in VALID_MODELS.values():
+			raise ValueError(f"❌ Invalid model: '{args.model}'. Valid options are: {', '.join(VALID_MODELS.values())}")
 
-
-	# Check if CUDA is available
-	if torch.cuda.is_available():
-		device = torch.device('cuda')
-	else:
-		device = torch.device('cpu')
+		# Setup device and data loaders
+		device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+		train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+		test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 		
-	print(f"Using device: {device}")
+		# Initialize model and criterion
+		model = ConvNet().to(device)
+		criterion = nn.CrossEntropyLoss()
+		
+		print(f"Using device: {device}")
+		return model, criterion, train_loader, test_loader, device
 
-	# Start the training loop
-	model = ConvNet().to(device)
-	criterion = nn.CrossEntropyLoss()
+	def execute_training(model, criterion, train_loader, test_loader, device):
+		"""Training phase"""
+		if args.model_path:
+			print(f"Loading model from {args.model_path}...")
+			model.load_state_dict(torch.load(args.model_path))
+		else:
+			print(f"Training model from scratch...")
+			if not os.path.isdir(default_model_dir):
+				os.makedirs(default_model_dir, exist_ok=True)
+			model = train_loop(model, criterion, args.epochs, train_loader, test_loader, device)
+			print(f"Saving model into {default_model_path}...")
+			torch.save(model.state_dict(), default_model_path)
+		
+		return model
+
+	def create_visualizations(model, device):
+		"""Visualization phase"""
+		# Model summary
+		input_size = (64, 3, 32, 32)
+		summary(model, input_size=input_size)
+
+		# Model graph
+		x = torch.randn(1, 3, 32, 32).to(device)
+		y = model(x)
+		file_name = build_plot_destination_path(model, 'model_graph')
+		make_dot(y, params=dict(model.named_parameters())).render(file_name, format="png", cleanup=True)
+
+	# Execute pipeline
 	
-	# If model passed as parameter, retrieve it from store	
-	if args.model_path:
-		print(f"Loading model from {args.model_path}...")
-		model.load_state_dict(torch.load(args.model_path))
-		print(f"Loaded model: {args.model_path}...")
-	else:
-		print(f"Training model from scratch...")
-		if not os.path.isdir(default_model_dir):
-			os.makedirs(default_model_dir, exist_ok=True)
-		model = train_loop(model, criterion, args.epochs, train_loader, test_loader, device)
-		print(f"Saving model into {default_model_path}...")
-		torch.save(model.state_dict(), default_model_path)
-
-	# Test loop
-	test_loop(model, criterion, test_loader, device)
-
-	# Print summary
-	input_size = (64, 3, 32, 32)
-
-	# Capture the summary as a string
-	bufferStr = io.StringIO()
-	summary(model, input_size=input_size)
-
-	# Dummy input
-	x = torch.randn(1, 3, 32, 32).to(device)
-
-	# Forward pass
-	y = model(x)
-
-	# Create diagram
-	file_name = build_plot_destination_path(model, 'model_graph')
-	make_dot(y, params=dict(model.named_parameters())).render(file_name, format="png", cleanup=True)
-
+	class PipelineObserver:
+		"""Observer that handles pipeline status updates"""
+		def on_start(self, stage): print(f"\n{'='*50}\n🔄 {stage}...\n{'='*50}")
+		def on_complete(self, stage): print(f"✅ {stage} complete!\n")
+		
+	class Pipeline:
+		"""Pipeline that executes stages and notifies observers"""
+		def __init__(self):
+			self.observer = PipelineObserver()
+			
+		def execute_stage(self, name, func, *args):
+			self.observer.on_start(name)
+			result = func(*args)
+			self.observer.on_complete(name)
+			return result
+			
+		def run(self):
+			# Load data
+			train_dataset, test_dataset = self.execute_stage(
+				"Loading data",
+				load_data
+			)
+			
+			# Setup environment
+			model, criterion, train_loader, test_loader, device = self.execute_stage(
+				"Setting up training environment",
+				setup_training_environment,
+				train_dataset, test_dataset
+			)
+			
+			# Execute training
+			model = self.execute_stage(
+				"Executing training",
+				execute_training,
+				model, criterion, train_loader, test_loader, device
+			)
+			
+			# Final evaluation
+			self.execute_stage(
+				"Running final evaluation",
+				test_loop,
+				model, criterion, test_loader, device
+			)
+			
+			# Create visualizations
+			self.execute_stage(
+				"Creating visualizations",
+				create_visualizations,
+				model, device
+			)
+			
+			print(f"\n{'='*50}")
+			print("🎉 Pipeline completed successfully!")
+			print(f"{'='*50}")
+	
+	# Execute pipeline
+	Pipeline().run()
 
