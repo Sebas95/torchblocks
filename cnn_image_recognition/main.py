@@ -29,14 +29,18 @@ PLOTS_ROOT_DIR = './plots'
 VALID_MODELS = {ConvNet.__name__ : "EffConvNet"}
 
 class TrainingMetrics:
-	def __init__(self, epoch_number, train_losses, train_f1_scores, train_accuracies, train_precisions, 
+	def __init__(self, epoch_labels, train_losses, train_f1_scores, train_accuracies, train_precisions, 
 				 train_recalls, val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls):
-		self.epoch_number = epoch_number
+		self.epoch_labels = epoch_labels
+		
+		#
 		self.train_losses = train_losses 
 		self.train_f1_scores = train_f1_scores
 		self.train_accuracies = train_accuracies
 		self.train_precisions = train_precisions
 		self.train_recalls = train_recalls
+		
+		# Validation metrics
 		self.val_losses = val_losses
 		self.val_f1_scores = val_f1_scores 
 		self.val_accuracies = val_accuracies
@@ -56,116 +60,92 @@ def build_plot_destination_path(model, file_name):
 	return f'{PLOTS_ROOT_DIR}/{folder_name}/{file_name}'
 
 
-def plot_curves(func):
+def plot_curves(payload):	
+	
+	epoch_labels = payload.training_metrics.epoch_labels
+	train_losses = payload.training_metrics.train_losses
+	train_f1_scores = payload.training_metrics.train_f1_scores
+	train_accuracies = payload.training_metrics.train_accuracies
+	train_precisions = payload.training_metrics.train_precisions
+	train_recalls = payload.training_metrics.train_recalls
+	val_losses = payload.training_metrics.val_losses
+	val_f1_scores = payload.training_metrics.val_f1_scores
+	val_accuracies = payload.training_metrics.val_accuracies 
+	val_precisions = payload.training_metrics.val_precisions
+	val_recalls = payload.training_metrics.val_recalls
+
+	# Refactored reusable method for plotting
+	def plot_metric_curve(metric_name, train_values, val_values=None, ylabel=None):
+		plt.figure(figsize=(10, 5))
+		plt.plot(epoch_labels, train_values, label=f'Train {metric_name}', marker='o')
+		if val_values is not None:
+			plt.plot(epoch_labels, val_values, label=f'Validation {metric_name}', marker='x')
+		plt.title(f"{metric_name} Curve")
+		plt.xlabel("Epoch")
+		plt.ylabel(ylabel or metric_name)
+		plt.legend()
+		plt.grid(True)
+		plt.tight_layout()
+		file_name = build_plot_destination_path(payload.model, f'{metric_name.lower().replace(" ", "_")}_curve.png')
+		plt.savefig(file_name)
+		plt.close()
+
+	# Plot after training
+	plot_metric_curve("Learning", train_losses, ylabel="Loss")
+	plot_metric_curve("Overfitting", train_losses, val_losses, ylabel="Loss")
+	plot_metric_curve("F1 Score", train_f1_scores, val_f1_scores)
+	plot_metric_curve("Accuracy", train_accuracies, val_accuracies)
+	plot_metric_curve("Precision", train_precisions, val_precisions)
+	plot_metric_curve("Recall", train_recalls, val_recalls)
+
+	return payload
+
+
+def train_loop(payload):
 	"""
-	A decorator function to plot various performance metrics curves during model training.
-
-	This decorator wraps a function that returns training and validation metrics, and generates
-	plots for the following metrics:
-	- Learning Curve (Training Loss vs Epoch)
-	- Overfitting Plot (Training Loss vs Validation Loss)
-	- F1 Score Curve (Training F1 Score vs Validation F1 Score)
-	- Accuracy Curve (Training Accuracy vs Validation Accuracy)
-	- Precision Curve (Training Precision vs Validation Precision)
-	- Recall Curve (Training Recall vs Validation Recall)
-
-	The plots are saved as PNG files in a destination path determined by the `build_plot_destination_path` function.
-
+	Executes the training loop for a neural network model.
+	This function performs the training of a neural network model over a specified number of epochs,
+	computing and tracking various performance metrics for both training and validation sets.
 	Args:
-		func (function): A function that returns the following metrics:
-			- model: The trained model object.
-			- epoch_number: List of epoch numbers.
-			- train_losses: List of training loss values.
-			- train_f1_scores: List of training F1 scores.
-			- train_accuracies: List of training accuracy values.
-			- train_precisions: List of training precision values.
-			- train_recalls: List of training recall values.
-			- val_losses: List of validation loss values.
-			- val_f1_scores: List of validation F1 scores.
-			- val_accuracies: List of validation accuracy values.
-			- val_precisions: List of validation precision values.
-			- val_recalls: List of validation recall values.
-
+		payload: An object containing:
+			- model: The neural network model to be trained
+			- criterion: The loss function
+			- epochs: Number of training epochs
+			- train_loader: DataLoader for training data
+			- test_loader: DataLoader for validation data
+			- device: Device to run the training on (CPU/GPU)
 	Returns:
-		function: The wrapped function that generates plots and returns the model object.
+		payload: The input payload object updated with:
+			- training_metrics: A TrainingMetrics object containing:
+				* epoch_labels: List of epoch numbers
+				* train_losses: List of training losses per epoch
+				* train_f1_scores: List of training F1 scores per epoch
+				* train_accuracies: List of training accuracies per epoch
+				* train_precisions: List of training precision scores per epoch
+				* train_recalls: List of training recall scores per epoch
+				* val_losses: List of validation losses per epoch
+				* val_f1_scores: List of validation F1 scores per epoch
+				* val_accuracies: List of validation accuracies per epoch
+				* val_precisions: List of validation precision scores per epoch
+				* val_recalls: List of validation recall scores per epoch
+			- model: The trained model
+	Notes:
+		The function uses SGD optimizer with learning rate 0.01 and momentum 0.7.
+		Training metrics are printed for each epoch.
 	"""
-	@wraps(func)
-	def wrapper(*args, **kwargs):
-		model, metrics = func(*args, **kwargs)
-		
-		epoch_number = metrics.epoch_number
-		train_losses = metrics.train_losses
-		train_f1_scores = metrics.train_f1_scores
-		train_accuracies = metrics.train_accuracies
-		train_precisions = metrics.train_precisions
-		train_recalls = metrics.train_recalls
-		val_losses = metrics.val_losses
-		val_f1_scores = metrics.val_f1_scores
-		val_accuracies = metrics.val_accuracies 
-		val_precisions = metrics.val_precisions
-		val_recalls = metrics.val_recalls
+	
+	model = payload.model
+	
+	criterion = payload.criterion
+	num_epochs = payload.epoch_count
+	train_loader = payload.train_loader
+	test_loader = payload.test_loader
+	device = payload.device
 
-		# Refactored reusable method for plotting
-		def plot_metric_curve(metric_name, train_values, val_values=None, ylabel=None):
-			plt.figure(figsize=(10, 5))
-			plt.plot(epoch_number, train_values, label=f'Train {metric_name}', marker='o')
-			if val_values is not None:
-				plt.plot(epoch_number, val_values, label=f'Validation {metric_name}', marker='x')
-			plt.title(f"{metric_name} Curve")
-			plt.xlabel("Epoch")
-			plt.ylabel(ylabel or metric_name)
-			plt.legend()
-			plt.grid(True)
-			plt.tight_layout()
-			file_name = build_plot_destination_path(model, f'{metric_name.lower().replace(" ", "_")}_curve.png')
-			plt.savefig(file_name)
-			plt.close()
-
-		# Plot after training
-		plot_metric_curve("Learning", train_losses, ylabel="Loss")
-		plot_metric_curve("Overfitting", train_losses, val_losses, ylabel="Loss")
-		plot_metric_curve("F1 Score", train_f1_scores, val_f1_scores)
-		plot_metric_curve("Accuracy", train_accuracies, val_accuracies)
-		plot_metric_curve("Precision", train_precisions, val_precisions)
-		plot_metric_curve("Recall", train_recalls, val_recalls)
-
-		return model  # Return just the model, clean interface
-
-	return wrapper
-
-
-@plot_curves
-def train_loop(model, criterion, num_epochs, train_loader, test_loader, device):
-	"""Train a PyTorch model using the provided data loaders.
-	This function handles the training loop for a neural network model, computing various
-	metrics for both training and validation sets during training.
-	Args:
-		model: PyTorch model to be trained
-		criterion: Loss function to be used for training
-		num_epochs (int): Number of training epochs
-		train_loader (DataLoader): DataLoader for training data
-		test_loader (DataLoader): DataLoader for validation/test data
-		device (torch.device): Device to run the training on (CPU or GPU)
-	Returns:
-		tuple: Contains:
-			- model: Trained PyTorch model
-			- TrainingMetrics: Object containing lists of training and validation metrics:
-				- epoch_number: List of epoch numbers
-				- train_losses: List of training losses per epoch
-				- train_f1_scores: List of training F1 scores per epoch
-				- train_accuracies: List of training accuracies per epoch
-				- train_precisions: List of training precision scores per epoch
-				- train_recalls: List of training recall scores per epoch
-				- val_losses: List of validation losses per epoch
-				- val_f1_scores: List of validation F1 scores per epoch
-				- val_accuracies: List of validation accuracies per epoch
-				- val_precisions: List of validation precision scores per epoch
-				- val_recalls: List of validation recall scores per epoch
-	"""
 	# Define the optimizer
 	optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.7)
 
-	epoch_number = []
+	epoch_labels = []
 	
 	# Lists to store losses and metrics for each epoch
 	train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls = ([] for _ in range(5))
@@ -209,7 +189,7 @@ def train_loop(model, criterion, num_epochs, train_loader, test_loader, device):
 			true_labels.extend(y_train.cpu().numpy())
 			predicted_labels.extend(predicted.cpu().numpy())
 
-		epoch_number.append(epoch)
+		epoch_labels.append(epoch)
 		
 		# Compute metrics for the epoch
 		train_loss = torch.stack(epoch_losses).mean().item()  
@@ -243,9 +223,12 @@ def train_loop(model, criterion, num_epochs, train_loader, test_loader, device):
 		val_precisions.append(val_precision)
 		val_recalls.append(val_recall)
 
-
-	return model, TrainingMetrics(epoch_number, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls,
+	payload.training_metrics = TrainingMetrics(epoch_labels, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls,
 					val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls)
+	
+	payload.model = model
+
+	return payload
 
 
 def test_loop(model, criterion, test_loader, device):
@@ -338,6 +321,7 @@ if __name__ == "__main__":
 		# Initialize model and criterion
 		payload.model = ConvNet().to(payload.device)
 		payload.criterion = nn.CrossEntropyLoss()
+		payload.epoch_count = args.epochs
 		
 		print(f"Using device: {payload.device}")
 		return payload
@@ -351,8 +335,8 @@ if __name__ == "__main__":
 			print(f"Training model from scratch...")
 			if not os.path.isdir(default_model_dir):
 				os.makedirs(default_model_dir, exist_ok=True)
-			payload.model = train_loop(payload.model, payload.criterion, args.epochs, 
-									 payload.train_loader, payload.test_loader, payload.device)
+
+			payload = train_loop(payload)
 			print(f"Saving model into {default_model_path}...")
 			torch.save(payload.model.state_dict(), default_model_path)
 		
@@ -369,7 +353,8 @@ if __name__ == "__main__":
 		y = payload.model(x)
 		file_name = build_plot_destination_path(payload.model, 'model_graph')
 		make_dot(y, params=dict(payload.model.named_parameters())).render(file_name, format="png", cleanup=True)
-		return payload
+
+		return plot_curves(payload)
 
 	# Execute pipeline
 	
@@ -401,6 +386,8 @@ if __name__ == "__main__":
 					self.train_loader = None
 					self.test_loader = None
 					self.device = None
+					self.training_metrics = None
+					self.epoch_count = None
 
 			# Initialize payload
 			payload = PipelinePayload()
