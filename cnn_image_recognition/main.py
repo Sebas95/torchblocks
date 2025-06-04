@@ -314,60 +314,62 @@ if __name__ == "__main__":
 	parser.add_argument("--model-path", type=str, help="Path to .pth file with model state_dict")
 	args = parser.parse_args()
 
-	def load_data():
+	def load_data(payload):
 		"""Data loading phase"""
 		tensor_transform = transforms.ToTensor()
 		normalization_transform = transforms.Normalize((0.5,), (0.5,))
 		transform = transforms.Compose([tensor_transform, normalization_transform])
 
-		train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-		test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
-		return train_dataset, test_dataset
+		payload.train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+		payload.test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+		return payload
 
-	def setup_training_environment(train_dataset, test_dataset):
+	def setup_training_environment(payload):
 		"""Data provisioning phase"""
 		# Validate model name
 		if args.model not in VALID_MODELS.values():
 			raise ValueError(f"❌ Invalid model: '{args.model}'. Valid options are: {', '.join(VALID_MODELS.values())}")
 
 		# Setup device and data loaders
-		device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-		train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-		test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+		payload.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+		payload.train_loader = DataLoader(payload.train_dataset, batch_size=64, shuffle=True)
+		payload.test_loader = DataLoader(payload.test_dataset, batch_size=64, shuffle=False)
 		
 		# Initialize model and criterion
-		model = ConvNet().to(device)
-		criterion = nn.CrossEntropyLoss()
+		payload.model = ConvNet().to(payload.device)
+		payload.criterion = nn.CrossEntropyLoss()
 		
-		print(f"Using device: {device}")
-		return model, criterion, train_loader, test_loader, device
+		print(f"Using device: {payload.device}")
+		return payload
 
-	def execute_training(model, criterion, train_loader, test_loader, device):
+	def execute_training(payload):
 		"""Training phase"""
 		if args.model_path:
 			print(f"Loading model from {args.model_path}...")
-			model.load_state_dict(torch.load(args.model_path))
+			payload.model.load_state_dict(torch.load(args.model_path))
 		else:
 			print(f"Training model from scratch...")
 			if not os.path.isdir(default_model_dir):
 				os.makedirs(default_model_dir, exist_ok=True)
-			model = train_loop(model, criterion, args.epochs, train_loader, test_loader, device)
+			payload.model = train_loop(payload.model, payload.criterion, args.epochs, 
+									 payload.train_loader, payload.test_loader, payload.device)
 			print(f"Saving model into {default_model_path}...")
-			torch.save(model.state_dict(), default_model_path)
+			torch.save(payload.model.state_dict(), default_model_path)
 		
-		return model
+		return payload
 
-	def create_visualizations(model, device):
+	def create_visualizations(payload):
 		"""Visualization phase"""
 		# Model summary
 		input_size = (64, 3, 32, 32)
-		summary(model, input_size=input_size)
+		summary(payload.model, input_size=input_size)
 
 		# Model graph
-		x = torch.randn(1, 3, 32, 32).to(device)
-		y = model(x)
-		file_name = build_plot_destination_path(model, 'model_graph')
-		make_dot(y, params=dict(model.named_parameters())).render(file_name, format="png", cleanup=True)
+		x = torch.randn(1, 3, 32, 32).to(payload.device)
+		y = payload.model(x)
+		file_name = build_plot_destination_path(payload.model, 'model_graph')
+		make_dot(y, params=dict(payload.model.named_parameters())).render(file_name, format="png", cleanup=True)
+		return payload
 
 	# Execute pipeline
 	
@@ -389,37 +391,46 @@ if __name__ == "__main__":
 			
 		def run(self):
 			# Load data
-			train_dataset, test_dataset = self.execute_stage(
+			# Define PipelinePayload class at the beginning
+			class PipelinePayload:
+				def __init__(self):
+					self.train_dataset = None
+					self.test_dataset = None
+					self.model = None
+					self.criterion = None
+					self.train_loader = None
+					self.test_loader = None
+					self.device = None
+
+			# Initialize payload
+			payload = PipelinePayload()
+
+			# Load data
+			payload = self.execute_stage(
 				"Loading data",
-				load_data
+				load_data,
+				payload
 			)
 			
 			# Setup environment
-			model, criterion, train_loader, test_loader, device = self.execute_stage(
+			payload = self.execute_stage(
 				"Setting up training environment",
 				setup_training_environment,
-				train_dataset, test_dataset
+				payload
 			)
 			
 			# Execute training
-			model = self.execute_stage(
+			payload = self.execute_stage(
 				"Executing training",
 				execute_training,
-				model, criterion, train_loader, test_loader, device
-			)
-			
-			# Final evaluation
-			self.execute_stage(
-				"Running final evaluation",
-				test_loop,
-				model, criterion, test_loader, device
+				payload
 			)
 			
 			# Create visualizations
 			self.execute_stage(
 				"Creating visualizations",
 				create_visualizations,
-				model, device
+				payload
 			)
 			
 			print(f"\n{'='*50}")
