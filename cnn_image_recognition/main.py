@@ -5,7 +5,7 @@ import torch.optim as optim
 import torch.nn as nn
 import datetime
 import argparse
-import io
+import numpy as np
 
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
@@ -33,7 +33,7 @@ class TrainingMetrics:
 				 train_recalls, val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls):
 		self.epoch_labels = epoch_labels
 		
-		#
+		# Train metrics
 		self.train_losses = train_losses 
 		self.train_f1_scores = train_f1_scores
 		self.train_accuracies = train_accuracies
@@ -146,13 +146,30 @@ def train_loop(payload):
 	optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.7)
 
 	epoch_labels = []
-	
-	# Lists to store losses and metrics for each epoch
-	train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls = ([] for _ in range(5))
+	train_losses = []
+	val_losses = []
 
-	# Lists to store validation losses and metrics
-	val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls = ([] for _ in range(5))
-	
+	# Initialize confusion matrix statistics
+	# This will hold per-epoch confusion matrix statistics
+	# for each class: true positives (tp), true negatives (tn), false positives (fp), false negatives (fn)
+	train_confusion_matrix = {}
+	val_confusion_matrix = {}
+	for e in range(num_epochs):
+		train_confusion_matrix[e] = {
+			'tp': torch.zeros(payload.classes_count),
+			'tn': torch.zeros(payload.classes_count),
+			'fp': torch.zeros(payload.classes_count),
+			'fn': torch.zeros(payload.classes_count)
+		}
+
+		val_confusion_matrix[e] = {
+			'tp': torch.zeros(payload.classes_count),
+			'tn': torch.zeros(payload.classes_count),
+			'fp': torch.zeros(payload.classes_count),
+			'fn': torch.zeros(payload.classes_count)
+		}
+
+
 	for epoch in range(num_epochs):
 
 		# Set the model to training mode
@@ -186,50 +203,84 @@ def train_loop(payload):
 			
 			# Collect true and predicted labels for metrics
 			_, predicted = torch.max(outputs, 1)
-			true_labels.extend(y_train.cpu().numpy())
-			predicted_labels.extend(predicted.cpu().numpy())
+			
+			# Get binary metrics for each batch
+			batch_true = y_train.cpu().numpy()
+			batch_pred = predicted.cpu().numpy()
+
+			# Convert predictions and labels to numpy arrays for metrics
+			# Append to the lists
+			true_labels.extend(batch_true.tolist())
+			predicted_labels.extend(batch_pred.tolist())
+
+		# At the end of the loop, convert lists to numpy arrays
+		train_true_labels = np.array(true_labels) 
+		train_predicted_labels = np.array(predicted_labels)
+
+		# Get validation metrics
+		val_loss, val_true_labels, val_predicted_labels = test_loop(model, criterion, test_loader, device)
 
 		epoch_labels.append(epoch)
-		
-		# Compute metrics for the epoch
-		train_loss = torch.stack(epoch_losses).mean().item()  
-		train_f1 = f1_score(true_labels, predicted_labels, average='weighted')
-		train_accuracy = accuracy_score(true_labels, predicted_labels)
-		train_precision = precision_score(true_labels, predicted_labels, average='weighted')
-		train_recall = recall_score(true_labels, predicted_labels, average='weighted')
 
-		# Print metrics for the epoch
-		print(f"Epoch [{epoch + 1}/{num_epochs}], "
-			  f"Train Loss: {train_loss:.4f}, "
-			  f"Train F1: {train_f1:.4f}, "
-			  f"Train Accuracy: {train_accuracy:.4f}, "
-			  f"Train Precision: {train_precision:.4f}, "
-			  f"Train Recall: {train_recall:.4f}")
-
-		# Append metrics to their respective lists
-		train_losses.append(train_loss)
-		train_f1_scores.append(train_f1)
-		train_accuracies.append(train_accuracy)
-		train_precisions.append(train_precision)
-		train_recalls.append(train_recall)
-		
-		# Get the validation loss
-		val_loss, val_accuracy, val_f1, val_precision, val_recall = test_loop(model, criterion, test_loader, device)
-		
-		# Append validation metrics to their respective lists
+		# Calculate metrics using accumulated statistics
+		epoch_loss = torch.stack(epoch_losses).mean().item()
+		train_losses.append(epoch_loss)
 		val_losses.append(val_loss)
-		val_f1_scores.append(val_f1)
-		val_accuracies.append(val_accuracy)
-		val_precisions.append(val_precision)
-		val_recalls.append(val_recall)
 
-	payload.training_metrics = TrainingMetrics(epoch_labels, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls,
-					val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls)
-	
-	payload.model = model
+		# Populate confusion matrix for training and validation sets	
+		for class_idx in range(payload.classes_count):
+			train_confusion_matrix[epoch]['tp'][class_idx] = ((train_predicted_labels == class_idx) & (train_true_labels == class_idx)).sum()
+			train_confusion_matrix[epoch]['tn'][class_idx] = ((train_predicted_labels != class_idx) & (train_true_labels != class_idx)).sum()
+			train_confusion_matrix[epoch]['fp'][class_idx] = ((train_predicted_labels == class_idx) & (train_true_labels != class_idx)).sum()
+			train_confusion_matrix[epoch]['fn'][class_idx] = ((train_predicted_labels != class_idx) & (train_true_labels == class_idx)).sum()
+
+			val_confusion_matrix[epoch]['tp'][class_idx] = ((val_predicted_labels == class_idx) & (val_true_labels == class_idx)).sum()
+			val_confusion_matrix[epoch]['tn'][class_idx] = ((val_predicted_labels != class_idx) & (val_true_labels != class_idx)).sum()
+			val_confusion_matrix[epoch]['fp'][class_idx] = ((val_predicted_labels == class_idx) & (val_true_labels != class_idx)).sum()
+			val_confusion_matrix[epoch]['fn'][class_idx] = ((val_predicted_labels != class_idx) & (val_true_labels == class_idx)).sum()
+
+		
+	payload.epoch_labels = epoch_labels
+	payload.train_losses = train_losses
+	payload.validation_losses = val_losses
+	payload.train_confusion_matrix = train_confusion_matrix
+	payload.validation_confusion_matrix = val_confusion_matrix
 
 	return payload
 
+def compute_metrics(confusion_matrix):
+	"""
+	Compute precision, recall, F1 and accuracy metrics from a confusion matrix.
+	Args:
+		confusion_matrix (dict): Dictionary containing confusion matrix values
+			Expected format:
+			{
+				'tp': tensor([...]), # True positives per class
+				'fp': tensor([...]), # False positives per class
+				'fn': tensor([...])  # False negatives per class
+			}
+			Each tensor should have shape (num_classes,)
+	Returns:
+		tuple: A tuple containing:
+			- precision (float): Mean precision across all classes
+			- recall (float): Mean recall across all classes
+			- f1 (float): Mean F1 score across all classes
+			- accuracy (float): Overall accuracy considering true positives vs total predictions
+	Note:
+		Small epsilon (1e-7) is added to denominators to avoid division by zero.
+
+	"""
+
+	precisions = confusion_matrix['tp'] / (confusion_matrix['tp'] + confusion_matrix['fp'] + 1e-7)
+	recalls = confusion_matrix['tp'] / (confusion_matrix['tp'] + confusion_matrix['fn'] + 1e-7)
+	f1s = 2 * (precisions * recalls) / (precisions + recalls + 1e-7)
+			
+	precision = precisions.mean().item()
+	recall = recalls.mean().item() 
+	f1 = f1s.mean().item()
+	accuracy = confusion_matrix['tp'].sum() / (confusion_matrix['tp'].sum() + confusion_matrix['fn'].sum())
+			
+	return precision, recall, f1, accuracy
 
 def test_loop(model, criterion, test_loader, device):
 	"""
@@ -278,14 +329,14 @@ def test_loop(model, criterion, test_loader, device):
 			true_labels.extend(y_test.cpu().numpy())
 			predicted_labels.extend(predicted.cpu().numpy())
 
+		# At the end of the loop, convert lists to numpy arrays
+		true_labels = np.array(true_labels) 
+		predicted_labels = np.array(predicted_labels)
+
 	# Compute average loss and accuracy
 	avg_loss = test_loss / total
-	accuracy = correct / total
-	f1 = f1_score(true_labels, predicted_labels, average='weighted')
-	precision = precision_score(true_labels, predicted_labels, average='weighted')
-	recall = recall_score(true_labels, predicted_labels, average='weighted')
 
-	return avg_loss, accuracy, f1, precision, recall
+	return avg_loss, true_labels, predicted_labels
 
 
 if __name__ == "__main__":
@@ -305,6 +356,9 @@ if __name__ == "__main__":
 
 		payload.train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
 		payload.test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+
+		payload.classes_count = len(payload.train_dataset.classes)
+
 		return payload
 
 	def setup_training_environment(payload):
@@ -341,6 +395,69 @@ if __name__ == "__main__":
 			torch.save(payload.model.state_dict(), default_model_path)
 		
 		return payload
+	
+	def compute_metrics_from_payload(payload):
+		"""
+		Compute precision, recall, F1 and accuracy metrics from the payload's confusion matrices.
+		Args:
+			payload: An object containing:
+				- train_confusion_matrix: Dictionary with training confusion matrix statistics
+				- validation_confusion_matrix: Dictionary with validation confusion matrix statistics
+		Returns:
+			TrainingMetrics: An object containing:
+				- epoch_labels: List of epoch numbers
+				- train_losses: List of training losses per epoch
+				- train_f1_scores: List of training F1 scores per epoch
+				- train_accuracies: List of training accuracies per epoch
+				- train_precisions: List of training precision scores per epoch
+				- train_recalls: List of training recall scores per epoch
+				- val_losses: List of validation losses per epoch
+				- val_f1_scores: List of validation F1 scores per epoch
+				- val_accuracies: List of validation accuracies per epoch
+				- val_precisions: List of validation precision scores per epoch
+				- val_recalls: List of validation recall scores per epoch
+		"""
+		val_f1_scores, val_accuracies, val_precisions, val_recalls = ([] for _ in range(4))
+		train_f1_scores, train_accuracies, train_precisions, train_recalls = ([] for _ in range(4))
+
+		train_confusion_matrix = payload.train_confusion_matrix
+		val_confusion_matrix = payload.validation_confusion_matrix
+		epoch_labels = payload.epoch_labels
+		train_losses = payload.train_losses
+		val_losses = payload.validation_losses
+
+		for epoch in range(payload.epoch_count):
+
+			# Calculate training metrics
+			train_precision, train_recall, train_f1, train_accuracy = compute_metrics(train_confusion_matrix[epoch])
+
+			# Print metrics for the epoch
+			print(f"Epoch [{epoch + 1}/{payload.epoch_count}], "
+				f"Train Loss: {train_losses[epoch]:.4f}, "
+				f"Train F1: {train_f1:.4f}, "
+				f"Train Accuracy: {train_accuracy:.4f}, "
+				f"Train Precision: {train_precision:.4f}, "
+				f"Train Recall: {train_recall:.4f}")
+
+			# Store training metrics
+			train_f1_scores.append(train_f1)
+			train_accuracies.append(train_accuracy)
+			train_precisions.append(train_precision)
+			train_recalls.append(train_recall)
+
+			# Calculate and store validation metrics
+			val_precision, val_recall, val_f1, val_accuracy = compute_metrics(val_confusion_matrix[epoch])
+			
+			val_f1_scores.append(val_f1)
+			val_accuracies.append(val_accuracy)
+			val_precisions.append(val_precision)
+			val_recalls.append(val_recall)
+
+		payload.training_metrics = TrainingMetrics(epoch_labels, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls,
+						val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls)
+		
+		return payload
+
 
 	def create_visualizations(payload):
 		"""Visualization phase"""
@@ -388,6 +505,12 @@ if __name__ == "__main__":
 					self.device = None
 					self.training_metrics = None
 					self.epoch_count = None
+					self.classes_count = None
+					self.epoch_labels = None
+					self.train_losses = None
+					self.validation_losses = None
+					self.train_confusion_matrix = None
+					self.validation_confusion_matrix = None
 
 			# Initialize payload
 			payload = PipelinePayload()
@@ -410,6 +533,12 @@ if __name__ == "__main__":
 			payload = self.execute_stage(
 				"Executing training",
 				execute_training,
+				payload
+			)
+
+			payload = self.execute_stage(
+				"Executing compute metrics",
+				compute_metrics_from_payload,
 				payload
 			)
 			
