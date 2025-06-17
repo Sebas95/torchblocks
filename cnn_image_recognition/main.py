@@ -60,19 +60,12 @@ def build_plot_destination_path(model, file_name):
 	return f'{PLOTS_ROOT_DIR}/{folder_name}/{file_name}'
 
 
-def plot_curves(payload):	
-	
+
+
+def plot_curves(payload):
+	""""Plots training and validation metrics curves after training."""
+
 	epoch_labels = payload.training_metrics.epoch_labels
-	train_losses = payload.training_metrics.train_losses
-	train_f1_scores = payload.training_metrics.train_f1_scores
-	train_accuracies = payload.training_metrics.train_accuracies
-	train_precisions = payload.training_metrics.train_precisions
-	train_recalls = payload.training_metrics.train_recalls
-	val_losses = payload.training_metrics.val_losses
-	val_f1_scores = payload.training_metrics.val_f1_scores
-	val_accuracies = payload.training_metrics.val_accuracies 
-	val_precisions = payload.training_metrics.val_precisions
-	val_recalls = payload.training_metrics.val_recalls
 
 	# Refactored reusable method for plotting
 	def plot_metric_curve(metric_name, train_values, val_values=None, ylabel=None):
@@ -91,16 +84,26 @@ def plot_curves(payload):
 		plt.close()
 
 	# Plot after training
-	plot_metric_curve("Learning", train_losses, ylabel="Loss")
-	plot_metric_curve("Overfitting", train_losses, val_losses, ylabel="Loss")
-	plot_metric_curve("F1 Score", train_f1_scores, val_f1_scores)
-	plot_metric_curve("Accuracy", train_accuracies, val_accuracies)
-	plot_metric_curve("Precision", train_precisions, val_precisions)
-	plot_metric_curve("Recall", train_recalls, val_recalls)
+	plot_metric_curve("Learning", payload.training_metrics.train_losses, ylabel="Loss")
+	plot_metric_curve("Overfitting", payload.training_metrics.train_losses, payload.training_metrics.val_losses, ylabel="Loss")
+	plot_metric_curve("F1 Score", payload.training_metrics.train_f1_scores, payload.training_metrics.val_f1_scores)
+	plot_metric_curve("Accuracy", payload.training_metrics.train_accuracies, payload.training_metrics.val_accuracies)
+	plot_metric_curve("Precision", payload.training_metrics.train_precisions, payload.training_metrics.val_precisions)
+	plot_metric_curve("Recall", payload.training_metrics.train_recalls, payload.training_metrics.val_recalls)
 
 	return payload
 
-
+def initialize_confusion_matrix(num_epochs, num_classes):
+	"""Initialize empty confusion matrix structure for each epoch"""
+	confusion_matrix = {}
+	metrics = ['tp', 'tn', 'fp', 'fn']
+	
+	for epoch in range(num_epochs):
+		confusion_matrix[epoch] = {
+			metric: torch.zeros(num_classes) for metric in metrics
+		}
+	return confusion_matrix
+	
 def train_loop(payload):
 	"""
 	Executes the training loop for a neural network model.
@@ -145,30 +148,7 @@ def train_loop(payload):
 	# Define the optimizer
 	optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.7)
 
-	epoch_labels = []
-	train_losses = []
-	val_losses = []
-
-	# Initialize confusion matrix statistics
-	# This will hold per-epoch confusion matrix statistics
-	# for each class: true positives (tp), true negatives (tn), false positives (fp), false negatives (fn)
-	train_confusion_matrix = {}
-	val_confusion_matrix = {}
-	for e in range(num_epochs):
-		train_confusion_matrix[e] = {
-			'tp': torch.zeros(payload.classes_count),
-			'tn': torch.zeros(payload.classes_count),
-			'fp': torch.zeros(payload.classes_count),
-			'fn': torch.zeros(payload.classes_count)
-		}
-
-		val_confusion_matrix[e] = {
-			'tp': torch.zeros(payload.classes_count),
-			'tn': torch.zeros(payload.classes_count),
-			'fp': torch.zeros(payload.classes_count),
-			'fn': torch.zeros(payload.classes_count)
-		}
-
+	result = {}
 
 	for epoch in range(num_epochs):
 
@@ -220,31 +200,19 @@ def train_loop(payload):
 		# Get validation metrics
 		val_loss, val_true_labels, val_predicted_labels = test_loop(model, criterion, test_loader, device)
 
-		epoch_labels.append(epoch)
-
 		# Calculate metrics using accumulated statistics
 		epoch_loss = torch.stack(epoch_losses).mean().item()
-		train_losses.append(epoch_loss)
-		val_losses.append(val_loss)
 
-		# Populate confusion matrix for training and validation sets	
-		for class_idx in range(payload.classes_count):
-			train_confusion_matrix[epoch]['tp'][class_idx] = ((train_predicted_labels == class_idx) & (train_true_labels == class_idx)).sum()
-			train_confusion_matrix[epoch]['tn'][class_idx] = ((train_predicted_labels != class_idx) & (train_true_labels != class_idx)).sum()
-			train_confusion_matrix[epoch]['fp'][class_idx] = ((train_predicted_labels == class_idx) & (train_true_labels != class_idx)).sum()
-			train_confusion_matrix[epoch]['fn'][class_idx] = ((train_predicted_labels != class_idx) & (train_true_labels == class_idx)).sum()
-
-			val_confusion_matrix[epoch]['tp'][class_idx] = ((val_predicted_labels == class_idx) & (val_true_labels == class_idx)).sum()
-			val_confusion_matrix[epoch]['tn'][class_idx] = ((val_predicted_labels != class_idx) & (val_true_labels != class_idx)).sum()
-			val_confusion_matrix[epoch]['fp'][class_idx] = ((val_predicted_labels == class_idx) & (val_true_labels != class_idx)).sum()
-			val_confusion_matrix[epoch]['fn'][class_idx] = ((val_predicted_labels != class_idx) & (val_true_labels == class_idx)).sum()
-
+		result[epoch] = {
+			'train_loss': epoch_loss,
+			'val_loss': val_loss,
+			'val_true_labels': val_true_labels,
+			'val_predicted_labels': val_predicted_labels,
+			'train_true_labels': train_true_labels,
+			'train_predicted_labels': train_predicted_labels
+		}
 		
-	payload.epoch_labels = epoch_labels
-	payload.train_losses = train_losses
-	payload.validation_losses = val_losses
-	payload.train_confusion_matrix = train_confusion_matrix
-	payload.validation_confusion_matrix = val_confusion_matrix
+	payload.training_results = result
 
 	return payload
 
@@ -417,27 +385,38 @@ if __name__ == "__main__":
 				- val_precisions: List of validation precision scores per epoch
 				- val_recalls: List of validation recall scores per epoch
 		"""
+		# Use helper function to populate confusion matrices
+		def populate_confusion_matrices(true_labels, predicted_labels, confusion_matrix, epoch, num_classes):
+			"""
+			Populates confusion matrix statistics for each class.
+			Args:
+			true_labels: Array of ground truth labels
+			predicted_labels: Array of predicted labels
+			confusion_matrix: Dictionary to store confusion matrix stats
+			epoch: Current epoch number
+			num_classes: Total number of classes
+			"""
+			for class_idx in range(num_classes):
+				confusion_matrix[epoch]['tp'][class_idx] = ((predicted_labels == class_idx) & (true_labels == class_idx)).sum()
+				confusion_matrix[epoch]['tn'][class_idx] = ((predicted_labels != class_idx) & (true_labels != class_idx)).sum()
+				confusion_matrix[epoch]['fp'][class_idx] = ((predicted_labels == class_idx) & (true_labels != class_idx)).sum()
+				confusion_matrix[epoch]['fn'][class_idx] = ((predicted_labels != class_idx) & (true_labels == class_idx)).sum()
+
+		# Populate both matrices using the helper function
+		# Initialize confusion matrices for both training and validation
+		train_confusion_matrix = initialize_confusion_matrix(payload.epoch_count, payload.classes_count)
+		val_confusion_matrix = initialize_confusion_matrix(payload.epoch_count, payload.classes_count)
+
 		val_f1_scores, val_accuracies, val_precisions, val_recalls = ([] for _ in range(4))
 		train_f1_scores, train_accuracies, train_precisions, train_recalls = ([] for _ in range(4))
 
-		train_confusion_matrix = payload.train_confusion_matrix
-		val_confusion_matrix = payload.validation_confusion_matrix
-		epoch_labels = payload.epoch_labels
-		train_losses = payload.train_losses
-		val_losses = payload.validation_losses
-
 		for epoch in range(payload.epoch_count):
+
+			populate_confusion_matrices(payload.training_results[epoch]['train_true_labels'], payload.training_results[epoch]['train_predicted_labels'], train_confusion_matrix, epoch, payload.classes_count)
+			populate_confusion_matrices(payload.training_results[epoch]['val_true_labels'], payload.training_results[epoch]['val_predicted_labels'], val_confusion_matrix, epoch, payload.classes_count)
 
 			# Calculate training metrics
 			train_precision, train_recall, train_f1, train_accuracy = compute_metrics(train_confusion_matrix[epoch])
-
-			# Print metrics for the epoch
-			print(f"Epoch [{epoch + 1}/{payload.epoch_count}], "
-				f"Train Loss: {train_losses[epoch]:.4f}, "
-				f"Train F1: {train_f1:.4f}, "
-				f"Train Accuracy: {train_accuracy:.4f}, "
-				f"Train Precision: {train_precision:.4f}, "
-				f"Train Recall: {train_recall:.4f}")
 
 			# Store training metrics
 			train_f1_scores.append(train_f1)
@@ -452,6 +431,10 @@ if __name__ == "__main__":
 			val_accuracies.append(val_accuracy)
 			val_precisions.append(val_precision)
 			val_recalls.append(val_recall)
+
+		epoch_labels = payload.training_results.keys()
+		train_losses = [payload.training_results[epoch]['train_loss'] for epoch in epoch_labels]
+		val_losses = [payload.training_results[epoch]['val_loss'] for epoch in epoch_labels]
 
 		payload.training_metrics = TrainingMetrics(epoch_labels, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls,
 						val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls)
@@ -506,11 +489,7 @@ if __name__ == "__main__":
 					self.training_metrics = None
 					self.epoch_count = None
 					self.classes_count = None
-					self.epoch_labels = None
-					self.train_losses = None
-					self.validation_losses = None
-					self.train_confusion_matrix = None
-					self.validation_confusion_matrix = None
+					self.training_results = None
 
 			# Initialize payload
 			payload = PipelinePayload()
