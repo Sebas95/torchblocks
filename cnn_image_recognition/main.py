@@ -3,7 +3,6 @@ import os
 import matplotlib.pyplot as plt
 import torch.optim as optim
 import torch.nn as nn
-import datetime
 import argparse
 import numpy as np
 
@@ -15,8 +14,6 @@ from torchviz import make_dot
 
 # Local imports
 from conv_net import ConvNet
-from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
-from tqdm import tqdm
 
 # Ensure the checkpoints directory exists and split the path
 default_model_dir = './checkpoints'
@@ -47,6 +44,89 @@ class TrainingMetrics:
 		self.val_precisions = val_precisions
 		self.val_recalls = val_recalls
 
+class EpochResult:
+	def __init__(self, train_loss, val_loss, val_true_labels, val_predicted_labels, train_true_labels, train_predicted_labels):
+		self.train_loss = train_loss
+		self.val_loss = val_loss
+		self.val_true_labels = val_true_labels
+		self.val_predicted_labels = val_predicted_labels
+		self.train_true_labels = train_true_labels
+		self.train_predicted_labels = train_predicted_labels
+
+class PipelinePayload:
+	def __init__(self):
+		self.train_dataset = None
+		self.test_dataset = None
+		self.model = None
+		self.criterion = None
+		self.train_loader = None
+		self.test_loader = None
+		self.device = None
+		self.training_metrics: TrainingMetrics = None
+		self.epoch_count = None
+		self.classes_count = None
+		self.training_results: dict[int, EpochResult] = None
+
+	
+class PipelineObserver:
+	"""Observer that handles pipeline status updates"""
+	def on_start(self, stage): print(f"\n{'='*50}\n🔄 {stage}...\n{'='*50}")
+	def on_complete(self, stage): print(f"✅ {stage} complete!\n")
+	
+class Pipeline:
+	"""Pipeline that executes stages and notifies observers"""
+	def __init__(self):
+		self.observer = PipelineObserver()
+		
+	def execute_stage(self, name, func, *args):
+		self.observer.on_start(name)
+		result = func(*args)
+		self.observer.on_complete(name)
+		return result
+			
+	def run(self):
+		# Load data
+		payload = PipelinePayload()
+
+		# Load data
+		payload = self.execute_stage(
+			"Loading data",
+			load_data,
+			payload
+		)
+			
+		# Setup environment
+		payload = self.execute_stage(
+			"Setting up training environment",
+			setup_training_environment,
+			payload
+		)
+			
+		# Execute training
+		payload = self.execute_stage(
+			"Executing training",
+			execute_training,
+			payload
+		)
+
+		payload = self.execute_stage(
+			"Executing compute metrics",
+			compute_metrics_from_payload,
+			payload
+		)
+			
+		# Create visualizations
+		self.execute_stage(
+			"Creating visualizations",
+			create_visualizations,
+			payload
+		)
+			
+		print(f"\n{'='*50}")
+		print("🎉 Pipeline completed successfully!")
+		print(f"{'='*50}")
+
+
 def build_plot_destination_path(model, file_name):
 
 	model_name = type(model).__name__	
@@ -58,8 +138,6 @@ def build_plot_destination_path(model, file_name):
 		os.mkdir(model_plot_base_directory)
 	
 	return f'{PLOTS_ROOT_DIR}/{folder_name}/{file_name}'
-
-
 
 
 def plot_curves(payload):
@@ -203,15 +281,14 @@ def train_loop(payload):
 		# Calculate metrics using accumulated statistics
 		epoch_loss = torch.stack(epoch_losses).mean().item()
 
-		result[epoch] = {
-			'train_loss': epoch_loss,
-			'val_loss': val_loss,
-			'val_true_labels': val_true_labels,
-			'val_predicted_labels': val_predicted_labels,
-			'train_true_labels': train_true_labels,
-			'train_predicted_labels': train_predicted_labels
-		}
-		
+		result[epoch] = EpochResult(
+			train_loss=epoch_loss,
+			val_loss=val_loss, 
+			val_true_labels=val_true_labels,
+			val_predicted_labels=val_predicted_labels,
+			train_true_labels=train_true_labels,
+			train_predicted_labels=train_predicted_labels
+		)
 	payload.training_results = result
 
 	return payload
@@ -307,6 +384,151 @@ def test_loop(model, criterion, test_loader, device):
 	return avg_loss, true_labels, predicted_labels
 
 
+def load_data(payload):
+	"""Data loading phase"""
+	tensor_transform = transforms.ToTensor()
+	normalization_transform = transforms.Normalize((0.5,), (0.5,))
+	transform = transforms.Compose([tensor_transform, normalization_transform])
+	payload.train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+	payload.test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+	payload.classes_count = len(payload.train_dataset.classes)
+
+	return payload
+
+def setup_training_environment(payload):
+	"""Data provisioning phase"""
+	# Validate model name
+	if args.model not in VALID_MODELS.values():
+		raise ValueError(f"❌ Invalid model: '{args.model}'. Valid options are: {', '.join(VALID_MODELS.values())}")
+
+	# Setup device and data loaders
+	payload.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	payload.train_loader = DataLoader(payload.train_dataset, batch_size=64, shuffle=True)
+	payload.test_loader = DataLoader(payload.test_dataset, batch_size=64, shuffle=False)
+	
+	# Initialize model and criterion
+	payload.model = ConvNet().to(payload.device)
+	payload.criterion = nn.CrossEntropyLoss()
+	payload.epoch_count = args.epochs
+		
+	print(f"Using device: {payload.device}")
+	return payload
+
+def execute_training(payload):
+	"""Training phase"""
+	if args.model_path:
+		print(f"Loading model from {args.model_path}...")
+		payload.model.load_state_dict(torch.load(args.model_path))
+	else:
+		print(f"Training model from scratch...")
+		if not os.path.isdir(default_model_dir):
+			os.makedirs(default_model_dir, exist_ok=True)
+
+		payload = train_loop(payload)
+		print(f"Saving model into {default_model_path}...")
+		torch.save(payload.model.state_dict(), default_model_path)
+		
+	return payload
+	
+def compute_metrics_from_payload(payload):
+	"""
+	Compute precision, recall, F1 and accuracy metrics from the payload's confusion matrices.
+	Args:
+		payload: An object containing:
+			- train_confusion_matrix: Dictionary with training confusion matrix statistics
+			- validation_confusion_matrix: Dictionary with validation confusion matrix statistics
+	Returns:
+		TrainingMetrics: An object containing:
+			- epoch_labels: List of epoch numbers
+			- train_losses: List of training losses per epoch
+			- train_f1_scores: List of training F1 scores per epoch
+			- train_accuracies: List of training accuracies per epoch
+			- train_precisions: List of training precision scores per epoch
+			- train_recalls: List of training recall scores per epoch
+			- val_losses: List of validation losses per epoch
+			- val_f1_scores: List of validation F1 scores per epoch
+			- val_accuracies: List of validation accuracies per epoch
+			- val_precisions: List of validation precision scores per epoch
+			- val_recalls: List of validation recall scores per epoch
+	"""
+
+	# Use helper function to populate confusion matrices
+	def populate_confusion_matrices(true_labels, predicted_labels, confusion_matrix, epoch, num_classes):
+		"""
+		Populates confusion matrix statistics for each class.
+		Args:
+		true_labels: Array of ground truth labels
+		predicted_labels: Array of predicted labels
+		confusion_matrix: Dictionary to store confusion matrix stats
+		epoch: Current epoch number
+		num_classes: Total number of classes
+		"""
+		for class_idx in range(num_classes):
+			confusion_matrix[epoch]['tp'][class_idx] = ((predicted_labels == class_idx) & (true_labels == class_idx)).sum()
+			confusion_matrix[epoch]['tn'][class_idx] = ((predicted_labels != class_idx) & (true_labels != class_idx)).sum()
+			confusion_matrix[epoch]['fp'][class_idx] = ((predicted_labels == class_idx) & (true_labels != class_idx)).sum()
+			confusion_matrix[epoch]['fn'][class_idx] = ((predicted_labels != class_idx) & (true_labels == class_idx)).sum()
+
+	# Populate both matrices using the helper function
+	# Initialize confusion matrices for both training and validation
+	train_confusion_matrix = initialize_confusion_matrix(payload.epoch_count, payload.classes_count)
+	val_confusion_matrix = initialize_confusion_matrix(payload.epoch_count, payload.classes_count)
+
+	val_f1_scores, val_accuracies, val_precisions, val_recalls = ([] for _ in range(4))
+	train_f1_scores, train_accuracies, train_precisions, train_recalls = ([] for _ in range(4))
+
+	epoch_labels = []
+	train_losses = []
+	val_losses = []
+
+	for epoch, epoch_results in payload.training_results.items():
+
+		populate_confusion_matrices(epoch_results.train_true_labels, epoch_results.train_predicted_labels, train_confusion_matrix, epoch, payload.classes_count)
+		populate_confusion_matrices(epoch_results.val_true_labels, epoch_results.val_predicted_labels, val_confusion_matrix, epoch, payload.classes_count)
+
+		# Calculate training metrics
+		train_precision, train_recall, train_f1, train_accuracy = compute_metrics(train_confusion_matrix[epoch])
+
+		# Store training metrics
+		train_f1_scores.append(train_f1)
+		train_accuracies.append(train_accuracy)
+		train_precisions.append(train_precision)
+		train_recalls.append(train_recall)
+
+		# Calculate and store validation metrics
+		val_precision, val_recall, val_f1, val_accuracy = compute_metrics(val_confusion_matrix[epoch])
+			
+		val_f1_scores.append(val_f1)
+		val_accuracies.append(val_accuracy)
+		val_precisions.append(val_precision)
+		val_recalls.append(val_recall)
+
+		epoch_labels.append(epoch)
+		train_losses.append(epoch_results.train_loss)
+		val_losses.append(epoch_results.val_loss)
+
+	# Create TrainingMetrics object with all collected metrics
+	payload.training_metrics = TrainingMetrics(epoch_labels, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls,
+					val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls)
+		
+	return payload
+
+
+def create_visualizations(payload):
+	"""Visualization phase"""
+	# Model summary
+	input_size = (64, 3, 32, 32)
+	summary(payload.model, input_size=input_size)
+
+	# Model graph
+	x = torch.randn(1, 3, 32, 32).to(payload.device)
+	y = payload.model(x)
+	file_name = build_plot_destination_path(payload.model, 'model_graph')
+	make_dot(y, params=dict(payload.model.named_parameters())).render(file_name, format="png", cleanup=True)
+
+	return plot_curves(payload)
+	
+
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description="Train and test CNN")
 	
@@ -316,222 +538,6 @@ if __name__ == "__main__":
 	parser.add_argument("--model-path", type=str, help="Path to .pth file with model state_dict")
 	args = parser.parse_args()
 
-	def load_data(payload):
-		"""Data loading phase"""
-		tensor_transform = transforms.ToTensor()
-		normalization_transform = transforms.Normalize((0.5,), (0.5,))
-		transform = transforms.Compose([tensor_transform, normalization_transform])
-
-		payload.train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-		payload.test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
-
-		payload.classes_count = len(payload.train_dataset.classes)
-
-		return payload
-
-	def setup_training_environment(payload):
-		"""Data provisioning phase"""
-		# Validate model name
-		if args.model not in VALID_MODELS.values():
-			raise ValueError(f"❌ Invalid model: '{args.model}'. Valid options are: {', '.join(VALID_MODELS.values())}")
-
-		# Setup device and data loaders
-		payload.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-		payload.train_loader = DataLoader(payload.train_dataset, batch_size=64, shuffle=True)
-		payload.test_loader = DataLoader(payload.test_dataset, batch_size=64, shuffle=False)
-		
-		# Initialize model and criterion
-		payload.model = ConvNet().to(payload.device)
-		payload.criterion = nn.CrossEntropyLoss()
-		payload.epoch_count = args.epochs
-		
-		print(f"Using device: {payload.device}")
-		return payload
-
-	def execute_training(payload):
-		"""Training phase"""
-		if args.model_path:
-			print(f"Loading model from {args.model_path}...")
-			payload.model.load_state_dict(torch.load(args.model_path))
-		else:
-			print(f"Training model from scratch...")
-			if not os.path.isdir(default_model_dir):
-				os.makedirs(default_model_dir, exist_ok=True)
-
-			payload = train_loop(payload)
-			print(f"Saving model into {default_model_path}...")
-			torch.save(payload.model.state_dict(), default_model_path)
-		
-		return payload
-	
-	def compute_metrics_from_payload(payload):
-		"""
-		Compute precision, recall, F1 and accuracy metrics from the payload's confusion matrices.
-		Args:
-			payload: An object containing:
-				- train_confusion_matrix: Dictionary with training confusion matrix statistics
-				- validation_confusion_matrix: Dictionary with validation confusion matrix statistics
-		Returns:
-			TrainingMetrics: An object containing:
-				- epoch_labels: List of epoch numbers
-				- train_losses: List of training losses per epoch
-				- train_f1_scores: List of training F1 scores per epoch
-				- train_accuracies: List of training accuracies per epoch
-				- train_precisions: List of training precision scores per epoch
-				- train_recalls: List of training recall scores per epoch
-				- val_losses: List of validation losses per epoch
-				- val_f1_scores: List of validation F1 scores per epoch
-				- val_accuracies: List of validation accuracies per epoch
-				- val_precisions: List of validation precision scores per epoch
-				- val_recalls: List of validation recall scores per epoch
-		"""
-		# Use helper function to populate confusion matrices
-		def populate_confusion_matrices(true_labels, predicted_labels, confusion_matrix, epoch, num_classes):
-			"""
-			Populates confusion matrix statistics for each class.
-			Args:
-			true_labels: Array of ground truth labels
-			predicted_labels: Array of predicted labels
-			confusion_matrix: Dictionary to store confusion matrix stats
-			epoch: Current epoch number
-			num_classes: Total number of classes
-			"""
-			for class_idx in range(num_classes):
-				confusion_matrix[epoch]['tp'][class_idx] = ((predicted_labels == class_idx) & (true_labels == class_idx)).sum()
-				confusion_matrix[epoch]['tn'][class_idx] = ((predicted_labels != class_idx) & (true_labels != class_idx)).sum()
-				confusion_matrix[epoch]['fp'][class_idx] = ((predicted_labels == class_idx) & (true_labels != class_idx)).sum()
-				confusion_matrix[epoch]['fn'][class_idx] = ((predicted_labels != class_idx) & (true_labels == class_idx)).sum()
-
-		# Populate both matrices using the helper function
-		# Initialize confusion matrices for both training and validation
-		train_confusion_matrix = initialize_confusion_matrix(payload.epoch_count, payload.classes_count)
-		val_confusion_matrix = initialize_confusion_matrix(payload.epoch_count, payload.classes_count)
-
-		val_f1_scores, val_accuracies, val_precisions, val_recalls = ([] for _ in range(4))
-		train_f1_scores, train_accuracies, train_precisions, train_recalls = ([] for _ in range(4))
-
-		for epoch in range(payload.epoch_count):
-
-			populate_confusion_matrices(payload.training_results[epoch]['train_true_labels'], payload.training_results[epoch]['train_predicted_labels'], train_confusion_matrix, epoch, payload.classes_count)
-			populate_confusion_matrices(payload.training_results[epoch]['val_true_labels'], payload.training_results[epoch]['val_predicted_labels'], val_confusion_matrix, epoch, payload.classes_count)
-
-			# Calculate training metrics
-			train_precision, train_recall, train_f1, train_accuracy = compute_metrics(train_confusion_matrix[epoch])
-
-			# Store training metrics
-			train_f1_scores.append(train_f1)
-			train_accuracies.append(train_accuracy)
-			train_precisions.append(train_precision)
-			train_recalls.append(train_recall)
-
-			# Calculate and store validation metrics
-			val_precision, val_recall, val_f1, val_accuracy = compute_metrics(val_confusion_matrix[epoch])
-			
-			val_f1_scores.append(val_f1)
-			val_accuracies.append(val_accuracy)
-			val_precisions.append(val_precision)
-			val_recalls.append(val_recall)
-
-		epoch_labels = payload.training_results.keys()
-		train_losses = [payload.training_results[epoch]['train_loss'] for epoch in epoch_labels]
-		val_losses = [payload.training_results[epoch]['val_loss'] for epoch in epoch_labels]
-
-		payload.training_metrics = TrainingMetrics(epoch_labels, train_losses, train_f1_scores, train_accuracies, train_precisions, train_recalls,
-						val_losses, val_f1_scores, val_accuracies, val_precisions, val_recalls)
-		
-		return payload
-
-
-	def create_visualizations(payload):
-		"""Visualization phase"""
-		# Model summary
-		input_size = (64, 3, 32, 32)
-		summary(payload.model, input_size=input_size)
-
-		# Model graph
-		x = torch.randn(1, 3, 32, 32).to(payload.device)
-		y = payload.model(x)
-		file_name = build_plot_destination_path(payload.model, 'model_graph')
-		make_dot(y, params=dict(payload.model.named_parameters())).render(file_name, format="png", cleanup=True)
-
-		return plot_curves(payload)
-
-	# Execute pipeline
-	
-	class PipelineObserver:
-		"""Observer that handles pipeline status updates"""
-		def on_start(self, stage): print(f"\n{'='*50}\n🔄 {stage}...\n{'='*50}")
-		def on_complete(self, stage): print(f"✅ {stage} complete!\n")
-		
-	class Pipeline:
-		"""Pipeline that executes stages and notifies observers"""
-		def __init__(self):
-			self.observer = PipelineObserver()
-			
-		def execute_stage(self, name, func, *args):
-			self.observer.on_start(name)
-			result = func(*args)
-			self.observer.on_complete(name)
-			return result
-			
-		def run(self):
-			# Load data
-			# Define PipelinePayload class at the beginning
-			class PipelinePayload:
-				def __init__(self):
-					self.train_dataset = None
-					self.test_dataset = None
-					self.model = None
-					self.criterion = None
-					self.train_loader = None
-					self.test_loader = None
-					self.device = None
-					self.training_metrics = None
-					self.epoch_count = None
-					self.classes_count = None
-					self.training_results = None
-
-			# Initialize payload
-			payload = PipelinePayload()
-
-			# Load data
-			payload = self.execute_stage(
-				"Loading data",
-				load_data,
-				payload
-			)
-			
-			# Setup environment
-			payload = self.execute_stage(
-				"Setting up training environment",
-				setup_training_environment,
-				payload
-			)
-			
-			# Execute training
-			payload = self.execute_stage(
-				"Executing training",
-				execute_training,
-				payload
-			)
-
-			payload = self.execute_stage(
-				"Executing compute metrics",
-				compute_metrics_from_payload,
-				payload
-			)
-			
-			# Create visualizations
-			self.execute_stage(
-				"Creating visualizations",
-				create_visualizations,
-				payload
-			)
-			
-			print(f"\n{'='*50}")
-			print("🎉 Pipeline completed successfully!")
-			print(f"{'='*50}")
-	
 	# Execute pipeline
 	Pipeline().run()
 
