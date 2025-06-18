@@ -94,6 +94,19 @@ class Pipeline:
 
 		return payload
 	
+
+	def build_plot_destination_path(self, model, file_name):
+
+		model_name = type(model).__name__	
+		folder_name = VALID_MODELS[model_name]
+		
+		# Prepare directories for plots
+		model_plot_base_directory = f"{PLOTS_ROOT_DIR}/{folder_name}"
+		if not os.path.isdir(model_plot_base_directory):
+			os.mkdir(model_plot_base_directory)
+		
+		return f'{PLOTS_ROOT_DIR}/{folder_name}/{file_name}'
+
 	def plot_curves(self, payload):
 		""""Plots training and validation metrics curves after training."""
 
@@ -111,7 +124,7 @@ class Pipeline:
 			plt.legend()
 			plt.grid(True)
 			plt.tight_layout()
-			file_name = build_plot_destination_path(payload.model, f'{metric_name.lower().replace(" ", "_")}_curve.png')
+			file_name = self.build_plot_destination_path(payload.model, f'{metric_name.lower().replace(" ", "_")}_curve.png')
 			plt.savefig(file_name)
 			plt.close()
 
@@ -134,7 +147,7 @@ class Pipeline:
 		# Model graph
 		x = torch.randn(1, 3, 32, 32).to(payload.device)
 		y = payload.model(x)
-		file_name = build_plot_destination_path(payload.model, 'model_graph')
+		file_name = self.build_plot_destination_path(payload.model, 'model_graph')
 		make_dot(y, params=dict(payload.model.named_parameters())).render(file_name, format="png", cleanup=True)
 
 		return self.plot_curves(payload)
@@ -281,7 +294,72 @@ class Pipeline:
 		accuracy = confusion_matrix['tp'].sum() / (confusion_matrix['tp'].sum() + confusion_matrix['fn'].sum())
 				
 		return precision, recall, f1, accuracy
+	
 
+	def train_loop(self, payload):
+		"""
+		Executes the training loop for a neural network model.
+		This function performs the training of a neural network model over a specified number of epochs,
+		computing and tracking various performance metrics for both training and validation sets.
+		Args:
+			payload: An object containing:
+				- model: The neural network model to be trained
+				- criterion: The loss function
+				- epochs: Number of training epochs
+				- train_loader: DataLoader for training data
+				- test_loader: DataLoader for validation data
+				- device: Device to run the training on (CPU/GPU)
+		Returns:
+			payload: The input payload object updated with:
+				- training_metrics: A TrainingMetrics object containing:
+					* epoch_labels: List of epoch numbers
+					* train_losses: List of training losses per epoch
+					* train_f1_scores: List of training F1 scores per epoch
+					* train_accuracies: List of training accuracies per epoch
+					* train_precisions: List of training precision scores per epoch
+					* train_recalls: List of training recall scores per epoch
+					* val_losses: List of validation losses per epoch
+					* val_f1_scores: List of validation F1 scores per epoch
+					* val_accuracies: List of validation accuracies per epoch
+					* val_precisions: List of validation precision scores per epoch
+					* val_recalls: List of validation recall scores per epoch
+				- model: The trained model
+		Notes:
+			The function uses SGD optimizer with learning rate 0.01 and momentum 0.7.
+			Training metrics are printed for each epoch.
+		"""
+		
+		model = payload.model
+		
+		criterion = payload.criterion
+		num_epochs = payload.epoch_count
+		train_loader = payload.train_loader
+		test_loader = payload.test_loader
+		device = payload.device
+
+		# TODO: Make this method abstract so that it can be used with different datasets
+		result = custom_train_loop(model, criterion, num_epochs, train_loader, test_loader, device)
+		
+		# Update payload with training results
+		payload.training_results = result
+
+		return payload
+	
+	def execute_training(self, payload):
+		"""Training phase"""
+		if args.model_path:
+			print(f"Loading model from {args.model_path}...")
+			payload.model.load_state_dict(torch.load(args.model_path))
+		else:
+			print(f"Training model from scratch...")
+			if not os.path.isdir(default_model_dir):
+				os.makedirs(default_model_dir, exist_ok=True)
+
+			payload = self.train_loop(payload)
+			print(f"Saving model into {default_model_path}...")
+			torch.save(payload.model.state_dict(), default_model_path)
+		
+		return payload
 				
 	def run(self):
 		# Load data
@@ -304,7 +382,7 @@ class Pipeline:
 		# Execute training
 		payload = self.execute_stage(
 			"Executing training",
-			execute_training,
+			self.execute_training,
 			payload
 		)
 
@@ -326,58 +404,7 @@ class Pipeline:
 		print(f"{'='*50}")
 
 
-def build_plot_destination_path(model, file_name):
-
-	model_name = type(model).__name__	
-	folder_name = VALID_MODELS[model_name]
-	
-	# Prepare directories for plots
-	model_plot_base_directory = f"{PLOTS_ROOT_DIR}/{folder_name}"
-	if not os.path.isdir(model_plot_base_directory):
-		os.mkdir(model_plot_base_directory)
-	
-	return f'{PLOTS_ROOT_DIR}/{folder_name}/{file_name}'
-	
-def train_loop(payload):
-	"""
-	Executes the training loop for a neural network model.
-	This function performs the training of a neural network model over a specified number of epochs,
-	computing and tracking various performance metrics for both training and validation sets.
-	Args:
-		payload: An object containing:
-			- model: The neural network model to be trained
-			- criterion: The loss function
-			- epochs: Number of training epochs
-			- train_loader: DataLoader for training data
-			- test_loader: DataLoader for validation data
-			- device: Device to run the training on (CPU/GPU)
-	Returns:
-		payload: The input payload object updated with:
-			- training_metrics: A TrainingMetrics object containing:
-				* epoch_labels: List of epoch numbers
-				* train_losses: List of training losses per epoch
-				* train_f1_scores: List of training F1 scores per epoch
-				* train_accuracies: List of training accuracies per epoch
-				* train_precisions: List of training precision scores per epoch
-				* train_recalls: List of training recall scores per epoch
-				* val_losses: List of validation losses per epoch
-				* val_f1_scores: List of validation F1 scores per epoch
-				* val_accuracies: List of validation accuracies per epoch
-				* val_precisions: List of validation precision scores per epoch
-				* val_recalls: List of validation recall scores per epoch
-			- model: The trained model
-	Notes:
-		The function uses SGD optimizer with learning rate 0.01 and momentum 0.7.
-		Training metrics are printed for each epoch.
-	"""
-	
-	model = payload.model
-	
-	criterion = payload.criterion
-	num_epochs = payload.epoch_count
-	train_loader = payload.train_loader
-	test_loader = payload.test_loader
-	device = payload.device
+def custom_train_loop(model, criterion, num_epochs, train_loader, test_loader, device):
 
 	# Define the optimizer
 	optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.7)
@@ -445,9 +472,8 @@ def train_loop(payload):
 			train_true_labels=train_true_labels,
 			train_predicted_labels=train_predicted_labels
 		)
-	payload.training_results = result
-
-	return payload
+	
+	return result
 
 def test_loop(model, criterion, test_loader, device):
 	"""
@@ -539,21 +565,6 @@ def define_training_environment():
 	
 	return device, model, criterion, epoch_count 
 
-def execute_training(payload):
-	"""Training phase"""
-	if args.model_path:
-		print(f"Loading model from {args.model_path}...")
-		payload.model.load_state_dict(torch.load(args.model_path))
-	else:
-		print(f"Training model from scratch...")
-		if not os.path.isdir(default_model_dir):
-			os.makedirs(default_model_dir, exist_ok=True)
-
-		payload = train_loop(payload)
-		print(f"Saving model into {default_model_path}...")
-		torch.save(payload.model.state_dict(), default_model_path)
-		
-	return payload
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description="Train and test CNN")
