@@ -14,6 +14,7 @@ from torchviz import make_dot
 
 # Local imports
 from conv_net import ConvNet
+import time
 
 # Ensure the checkpoints directory exists and split the path
 default_model_dir = './checkpoints'
@@ -65,12 +66,21 @@ class PipelinePayload:
 		self.classes_count = None
 		self.training_results: dict[int, EpochResult] = None
 
-	
 class PipelineObserver:
-	"""Observer that handles pipeline status updates"""
-	def on_start(self, stage): print(f"\n{'='*50}\n🔄 {stage}...\n{'='*50}")
-	def on_complete(self, stage): print(f"✅ {stage} complete!\n")
-	
+		"""Observer that handles pipeline status updates"""
+		def __init__(self):
+			self.stage_start_times = {}
+
+		def on_start(self, stage):
+			print(f"\n{'='*50}\n🔄 {stage}...\n{'='*50}")
+			self.stage_start_times[stage] = time.time()
+
+		def on_complete(self, stage):
+			end_time = time.time()
+			start_time = self.stage_start_times.get(stage, end_time)
+			elapsed = end_time - start_time
+			print(f"✅ {stage} complete! (Elapsed: {elapsed:.2f} seconds)\n")
+
 class Pipeline:
 	"""Pipeline that executes stages and notifies observers"""
 	def __init__(self):
