@@ -110,14 +110,21 @@ class ClassificationPipeline(ABC):
 	def create_visualizations(self, payload):
 		"""Visualization phase"""
 		# Model summary
-		input_size = (64, 3, 32, 32)
-		summary(payload.model, input_size=input_size)
+        # Try to infer input_size from a batch of data
+		try:
+			batch = next(iter(payload.train_loader))
+			if isinstance(batch, (list, tuple)):
+				input_tensor = batch[0]
+			else:
+				input_tensor = batch
+			input_size = tuple(input_tensor.shape)
 
-		# Model graph
-		x = torch.randn(1, 3, 32, 32).to(payload.device)
-		y = payload.model(x)
-		file_name = self.build_plot_destination_path(payload.model, 'model_graph')
-		make_dot(y, params=dict(payload.model.named_parameters())).render(file_name, format="png", cleanup=True)
+			print(f"Input size inferred from train_loader: {input_size}")
+			
+		except Exception as e:
+			raise RuntimeError("Could not infer input_size from train_loader. Please check your dataset.") from e
+		
+		summary(payload.model, input_size=input_size)
 
 		return self.plot_curves(payload)
 	
