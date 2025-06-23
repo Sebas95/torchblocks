@@ -6,7 +6,7 @@ import torch.nn as nn
 import argparse
 import numpy as np
 
-from torchblocks import TrainingMetrics
+from torchblocks.TrainingMetrics import TrainingMetrics
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from functools import wraps
