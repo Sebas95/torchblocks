@@ -7,9 +7,11 @@ import argparse
 import numpy as np
 
 from torchblocks.TrainingMetrics import TrainingMetrics
+from torchblocks.EpochResult import EpochResult
+from torchblocks.PipelinePayload import PipelinePayload
+from torchblocks.PipelineObserver import PipelineObserver
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
-from functools import wraps
 from torchinfo import summary
 from torchviz import make_dot
 
@@ -26,42 +28,6 @@ PLOTS_ROOT_DIR = './plots'
 
 # Map the code name to the class name
 VALID_MODELS = {ConvNet.__name__ : "EffConvNet"}
-
-class EpochResult:
-	def __init__(self, train_loss, val_loss, val_true_labels, val_predicted_labels, train_true_labels, train_predicted_labels):
-		self.train_loss = train_loss
-		self.val_loss = val_loss
-		self.val_true_labels = val_true_labels
-		self.val_predicted_labels = val_predicted_labels
-		self.train_true_labels = train_true_labels
-		self.train_predicted_labels = train_predicted_labels
-
-class PipelinePayload:
-	def __init__(self):
-		self.model = None
-		self.criterion = None
-		self.train_loader = None
-		self.test_loader = None
-		self.device = None
-		self.training_metrics: TrainingMetrics = None
-		self.epoch_count = None
-		self.classes_count = None
-		self.training_results: dict[int, EpochResult] = None
-
-class PipelineObserver:
-		"""Observer that handles pipeline status updates"""
-		def __init__(self):
-			self.stage_start_times = {}
-
-		def on_start(self, stage):
-			print(f"\n{'='*50}\n🔄 {stage}...\n{'='*50}")
-			self.stage_start_times[stage] = time.time()
-
-		def on_complete(self, stage):
-			end_time = time.time()
-			start_time = self.stage_start_times.get(stage, end_time)
-			elapsed = end_time - start_time
-			print(f"✅ {stage} complete! (Elapsed: {elapsed:.2f} seconds)\n")
 
 class Pipeline:
 	"""Pipeline that executes stages and notifies observers"""
