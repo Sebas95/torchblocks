@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: torchblocks
+Version: 0.1
+Summary: Reusable code blocks for Pytorch training and evaluation
+Author: Sebas95
+License-File: LICENSE
+Dynamic: author
+Dynamic: license-file
+Dynamic: summary
