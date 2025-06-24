@@ -32,22 +32,6 @@ class ClassificationPipeline(ABC):
 
 		payload.train_loader = train_loader
 		payload.test_loader = test_loader
-
-		# Analyze class balance in the training set
-		class_counts = [0] * classes_count
-		for _, labels in train_loader:
-			for label in labels:
-				class_counts[label] += 1
-
-		max_count = max(class_counts)
-		min_count = min(class_counts)
-		balance_ratio = min_count / max_count if max_count > 0 else 0
-
-		if balance_ratio < 0.8:
-			print(f"⚠️  Unbalanced dataset detected: class counts = {class_counts}")
-		else:
-			print(f"✅ Balanced dataset: class counts = {class_counts}")
-
 		payload.classes_count = classes_count
 		payload.input_size = input_size
 
