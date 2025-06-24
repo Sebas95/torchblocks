@@ -12,3 +12,4 @@ class PipelinePayload:
 		self.epoch_count = None
 		self.classes_count = None
 		self.training_results: dict[int, EpochResult] = None
+		self.input_shape = None

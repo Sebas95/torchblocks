@@ -5,9 +5,12 @@ import matplotlib.pyplot as plt
 from torchblocks.TrainingMetrics import TrainingMetrics
 from torchblocks.PipelinePayload import PipelinePayload
 from torchblocks.PipelineObserver import PipelineObserver
+from torchblocks.EpochResult import EpochResult
+from torch.utils.data import DataLoader
 from torchinfo import summary
 from torchviz import make_dot
 from abc import ABC, abstractmethod
+import numpy as np
 
 PLOTS_ROOT_DIR = './plots'
 
@@ -22,14 +25,15 @@ class ClassificationPipeline(ABC):
 		self.observer.on_complete(name)
 		return result
 	
-	def load_dataset(self, payload):
+	def load_dataset(self, payload : PipelinePayload):
 		"""Data loading phase"""
 
-		train_loader, test_loader, classes_count = self.load_training_and_test_data()
+		train_loader, test_loader, classes_count, input_size = self.load_training_and_test_data()
 
 		payload.train_loader = train_loader
 		payload.test_loader = test_loader
 		payload.classes_count = classes_count
+		payload.input_size = input_size
 
 		return payload
 	
@@ -38,7 +42,10 @@ class ClassificationPipeline(ABC):
 		"""		Abstract method for custom training loop.
 		Should be implemented in subclasses to provide specific training logic.
 		"""
-		pass
+
+		result: dict[int, EpochResult] = {}
+		
+		return result
 
 	@abstractmethod
 	def test_loop(self):
@@ -46,7 +53,11 @@ class ClassificationPipeline(ABC):
 		Abstract method for testing loop.
 		Should be implemented in subclasses to provide specific testing logic.
 		"""
-		pass
+		avg_loss = 0.0
+		true_labels = np.array([])
+		predicted_labels = np.array([])
+
+		return avg_loss, true_labels, predicted_labels
 
 	@abstractmethod
 	def load_training_and_test_data(self):
@@ -54,7 +65,12 @@ class ClassificationPipeline(ABC):
 		Abstract method to load training and test data.
 		Should be implemented in subclasses to provide specific dataset loading logic.
 		"""
-		pass
+		train_loader = DataLoader([])
+		test_loader = DataLoader([])
+		classes_count = 0
+		input_size = (0, 0, 0)  # Default input size, should be updated in subclasses
+
+		return train_loader, test_loader, classes_count, input_size
 
 	@abstractmethod
 	def define_training_environment(self):
@@ -62,7 +78,12 @@ class ClassificationPipeline(ABC):
 		Abstract method to define the training environment.
 		Should be implemented in subclasses to provide specific environment setup logic.
 		"""
-		pass	
+		device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+		model = None  # Should be defined in subclasses
+		criterion = None  # Should be defined in subclasses
+		epoch_count = 0  # Should be defined in subclasses
+
+		return device, model, criterion, epoch_count 	
 
 	def build_plot_destination_path(self, model, file_name):
 
@@ -76,7 +97,7 @@ class ClassificationPipeline(ABC):
 		
 		return f'{PLOTS_ROOT_DIR}/{folder_name}/{file_name}'
 
-	def plot_curves(self, payload):
+	def plot_curves(self, payload : PipelinePayload):
 		""""Plots training and validation metrics curves after training."""
 
 		epoch_labels = payload.training_metrics.epoch_labels
@@ -107,24 +128,10 @@ class ClassificationPipeline(ABC):
 
 		return payload
 	
-	def create_visualizations(self, payload):
+	def create_visualizations(self, payload : PipelinePayload):
 		"""Visualization phase"""
-		# Model summary
-        # Try to infer input_size from a batch of data
-		try:
-			batch = next(iter(payload.train_loader))
-			if isinstance(batch, (list, tuple)):
-				input_tensor = batch[0]
-			else:
-				input_tensor = batch
-			input_size = tuple(input_tensor.shape)
 
-			print(f"Input size inferred from train_loader: {input_size}")
-			
-		except Exception as e:
-			raise RuntimeError("Could not infer input_size from train_loader. Please check your dataset.") from e
-		
-		summary(payload.model, input_size=input_size)
+		summary(payload.model, input_size=payload.input_size)
 
 		return self.plot_curves(payload)
 	
@@ -222,7 +229,7 @@ class ClassificationPipeline(ABC):
 		return payload
 	
 
-	def setup_training_environment(self, payload):
+	def setup_training_environment(self, payload : PipelinePayload):
 		"""Data provisioning phase"""
 		
 		device, model, criterion, epoch_count = self.define_training_environment()
@@ -271,7 +278,7 @@ class ClassificationPipeline(ABC):
 		return precision, recall, f1, accuracy
 	
 
-	def execute_training(self, payload):
+	def execute_training(self, payload : PipelinePayload):
 		"""
 		Executes the training loop for a neural network model.
 		This function performs the training of a neural network model over a specified number of epochs,

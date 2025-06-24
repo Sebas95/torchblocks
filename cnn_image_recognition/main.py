@@ -176,7 +176,23 @@ class Pipeline(ClassificationPipeline):
 		test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
 		classes_count = len(train_dataset.classes)
-		return train_loader, test_loader, classes_count
+
+		# Model summary
+        # Try to infer input_size from a batch of data
+		try:
+			batch = next(iter(train_loader))
+			if isinstance(batch, (list, tuple)):
+				input_tensor = batch[0]
+			else:
+				input_tensor = batch
+			input_size = tuple(input_tensor.shape)
+
+			print(f"Input size inferred from train_loader: {input_size}")
+			
+		except Exception as e:
+			raise RuntimeError("Could not infer input_size from train_loader. Please check your dataset.") from e
+		
+		return train_loader, test_loader, classes_count, input_size
 
 
 	def define_training_environment(self):					
