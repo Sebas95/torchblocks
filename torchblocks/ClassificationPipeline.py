@@ -340,9 +340,10 @@ class ClassificationPipeline(ABC):
 		train_loader = payload.train_loader
 		test_loader = payload.test_loader
 		device = payload.device
+		optimizer = payload.optimizer
 
-		result = self.custom_train_loop(model, criterion, num_epochs, train_loader, test_loader, device)
-		
+		result = self.custom_train_loop(model, criterion, num_epochs, train_loader, test_loader, optimizer, device)
+
 		# Update payload with training results
 		payload.training_results = result
 
