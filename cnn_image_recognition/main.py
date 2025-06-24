@@ -87,6 +87,11 @@ class Pipeline(ClassificationPipeline):
 			# Calculate metrics using accumulated statistics
 			epoch_loss = torch.stack(epoch_losses).mean().item()
 
+			# Print validation and training loss
+			print(f"Epoch [{epoch+1}/{num_epochs}], "
+				  f"Train Loss: {epoch_loss:.4f}, "
+				  f"Val Loss: {val_loss:.4f}")
+
 			result[epoch] = EpochResult(
 				train_loss=epoch_loss,
 				val_loss=val_loss, 
