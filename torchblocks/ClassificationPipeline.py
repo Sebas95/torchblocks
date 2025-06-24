@@ -102,8 +102,9 @@ class ClassificationPipeline(ABC):
 		model = None  # Should be defined in subclasses
 		criterion = None  # Should be defined in subclasses
 		epoch_count = 0  # Should be defined in subclasses
+		optimizer = None
 
-		return device, model, criterion, epoch_count 	
+		return device, model, criterion, epoch_count, optimizer
 
 	def build_plot_destination_path(self, model, file_name):
 
@@ -252,13 +253,14 @@ class ClassificationPipeline(ABC):
 	def setup_training_environment(self, payload : PipelinePayload):
 		"""Data provisioning phase"""
 		
-		device, model, criterion, epoch_count = self.define_training_environment()
+		device, model, criterion, epoch_count, optimizer = self.define_training_environment()
 		
 		# Initialize model and criterion
 		payload.device = device
 		payload.model = model
 		payload.criterion = criterion
 		payload.epoch_count = epoch_count
+		payload.optimizer = optimizer
 
 		print(f"Using device: {device}")
 		return payload

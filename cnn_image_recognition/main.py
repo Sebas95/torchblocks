@@ -27,10 +27,7 @@ class Pipeline(ClassificationPipeline):
 		super().__init__()
 		print("🚀 Starting CNN Image Recognition Pipeline...")
 
-	def custom_train_loop(self, model, criterion, num_epochs, train_loader, test_loader, device):
-
-		# Define the optimizer
-		optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.7)
+	def custom_train_loop(self, model, criterion, num_epochs, train_loader, test_loader, optimizer, device):
 
 		result = {}
 
@@ -217,8 +214,11 @@ class Pipeline(ClassificationPipeline):
 		epoch_count = args.epochs
 			
 		print(f"Using device: {device}")
-		
-		return device, model, criterion, epoch_count 
+
+		# Define the optimizer
+		optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+
+		return device, model, criterion, epoch_count, optimizer
 
 
 if __name__ == "__main__":
