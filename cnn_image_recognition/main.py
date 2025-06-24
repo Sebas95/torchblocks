@@ -30,7 +30,7 @@ class Pipeline(ClassificationPipeline):
 	def custom_train_loop(self, model, criterion, num_epochs, train_loader, test_loader, device):
 
 		# Define the optimizer
-		optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.7)
+		optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
 		result = {}
 
