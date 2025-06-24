@@ -39,7 +39,6 @@ class ClassificationPipeline(ABC):
 
 	def analyze_data(self, payload : PipelinePayload):
 		"""Data analysis phase"""
-
 	
 		# Analyze class balance in the training set
 		class_counts = [0] * payload.classes_count
